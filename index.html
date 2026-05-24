@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/images/Logo.jpg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ARVI Ortho & Child Care | Orthopaedic & Pediatric Clinic in Porur, Chennai</title>
+    <meta name="description" content="ARVI Ortho and Child Care — Leading orthopaedic and pediatric clinic in Porur, Chennai. Expert orthopaedic surgery, child care, vaccination, physiotherapy. Book appointment online." />
+    <meta name="keywords" content="orthopaedic clinic Porur, pediatric clinic Chennai, child specialist Porur, bone specialist Chennai, physiotherapy Porur, ARVI ortho" />
+    <meta property="og:title" content="ARVI Ortho & Child Care | Porur, Chennai" />
+    <meta property="og:description" content="Comprehensive Orthopaedic & Pediatric care under one roof. Helping You Move, Helping Them Grow." />
+    <meta property="og:image" content="/images/Logo-banner.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="/images/Logo-banner.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Remove "Made in Bolt" badge injected by Bolt.new hosting
+      function removeBoltBadge() {
+        const selectors = [
+          'a[href*="bolt.new"]',
+          'a[href*="stackblitz"]',
+          'iframe[src*="bolt.new"]',
+          '[id*="bolt"]',
+          '[class*="bolt-badge"]',
+          '[data-bolt-badge]'
+        ];
+        selectors.forEach(sel => {
+          document.querySelectorAll(sel).forEach(el => el.remove());
+        });
+      }
+      // Run immediately and observe for late injection
+      document.addEventListener('DOMContentLoaded', removeBoltBadge);
+      const observer = new MutationObserver(removeBoltBadge);
+      observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    </script>
+  </body>
+</html>

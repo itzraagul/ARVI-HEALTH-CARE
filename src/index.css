@@ -1,0 +1,116 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    scroll-behavior: smooth;
+  }
+  body {
+    font-family: 'Inter', 'Manrope', sans-serif;
+    color: #1a202c;
+    background: #ffffff;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4, h5 {
+    font-family: 'Poppins', 'Inter', sans-serif;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+  }
+  .glass-dark {
+    background: rgba(10, 61, 98, 0.75);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  .btn-primary {
+    @apply bg-[#0F9FA8] text-white px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-300 hover:bg-[#0a7a82] hover:shadow-lg hover:-translate-y-0.5 inline-flex items-center gap-2;
+  }
+  .btn-secondary {
+    @apply border-2 border-[#0F9FA8] text-[#0F9FA8] px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-300 hover:bg-[#0F9FA8] hover:text-white inline-flex items-center gap-2;
+  }
+  .btn-green {
+    @apply bg-[#3CB371] text-white px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-300 hover:bg-[#2d8a57] hover:shadow-lg inline-flex items-center gap-2;
+  }
+  .input-field {
+    @apply w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:border-[#0F9FA8] focus:ring-2 focus:ring-[#0F9FA8]/20 text-sm transition-all duration-200 bg-white;
+  }
+  .card-hover {
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+  .card-hover:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 20px 60px rgba(15, 159, 168, 0.18);
+  }
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-12px); }
+}
+
+.animate-fade-up { animation: fadeInUp 0.7s ease forwards; }
+.animate-fade-in { animation: fadeIn 0.6s ease forwards; }
+.animate-float { animation: float 4s ease-in-out infinite; }
+
+.delay-100 { animation-delay: 0.1s; }
+.delay-200 { animation-delay: 0.2s; }
+.delay-300 { animation-delay: 0.3s; }
+.delay-400 { animation-delay: 0.4s; }
+.delay-500 { animation-delay: 0.5s; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #f5f7fa; }
+::-webkit-scrollbar-thumb { background: #0F9FA8; border-radius: 3px; }
+
+/* Hide Bolt.new "Made in Bolt" badge */
+a[href*="bolt.new"],
+a[href*="stackblitz"],
+iframe[src*="bolt.new"],
+div[class*="bolt-badge"],
+div[id*="bolt-badge"],
+#bolt-badge,
+.bolt-badge,
+[data-bolt-badge] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* ─── Additional Utility Styles ─────────────────────────────── */
+.shadow-card { box-shadow: 0 2px 12px rgba(10,61,98,0.07); }
+.card-hover { transition: all 0.2s ease; }
+.card-hover:hover { box-shadow: 0 8px 24px rgba(10,61,98,0.12); transform: translateY(-2px); }
+
+/* Hide Bolt.new "Made in Bolt" badge */
+a[href*="bolt.new"],
+a[href*="stackblitz"],
+iframe[src*="bolt.new"],
+div[class*="bolt-badge"],
+div[id*="bolt-badge"],
+#bolt-badge,
+.bolt-badge,
+[data-bolt-badge] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
