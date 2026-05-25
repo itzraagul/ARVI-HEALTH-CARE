@@ -34,7 +34,7 @@ export default function AboutSection() {
             </div>
 
             <p className="text-gray-600 leading-relaxed">
-              ARVI Ortho and Child Care is a premier multi-specialty clinic located in Porur, Chennai, dedicated to providing exceptional orthopaedic and pediatric healthcare services. Our clinic combines cutting-edge medical technology with compassionate, personalized care.
+              ARVI Ortho and Child Care is a premier multi-specialty clinic located in Porur, Chennai, dedicated to providing exceptional orthopaedic and Paediatric healthcare services. Our clinic combines cutting-edge medical technology with compassionate, personalized care.
             </p>
 
             <p className="text-gray-600 leading-relaxed">
@@ -45,7 +45,7 @@ export default function AboutSection() {
             <div className="grid sm:grid-cols-2 gap-3">
               {[
                 'Expert Orthopaedic Surgery',
-                'Comprehensive Pediatric Care',
+                'Comprehensive Paediatric Care',
                 'Modern Diagnostic Facilities',
                 'Physiotherapy & Rehabilitation',
                 'Child Vaccination Programs',

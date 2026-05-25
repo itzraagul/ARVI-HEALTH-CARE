@@ -10,7 +10,7 @@ export default function About() {
           <span className="text-[#0F9FA8] text-sm font-semibold tracking-widest uppercase">Our Story</span>
           <h1 className="mt-3 text-4xl md:text-5xl font-bold text-[#0A3D62] font-heading">About ARVI Ortho & Child Care</h1>
           <p className="mt-5 text-gray-600 text-lg max-w-3xl mx-auto leading-relaxed">
-            A premier multi-specialty clinic in Porur, Chennai, dedicated to providing exceptional orthopaedic and pediatric healthcare for your entire family.
+            A premier multi-specialty clinic in Porur, Chennai, dedicated to providing exceptional orthopaedic and Paediatric healthcare for your entire family.
           </p>
         </div>
       </section>
@@ -28,7 +28,7 @@ export default function About() {
                 At ARVI Ortho and Child Care, our mission is to provide world-class medical care that combines clinical excellence with genuine human compassion. We believe every patient deserves personalized attention and the highest standard of treatment.
               </p>
               <p className="text-gray-600 leading-relaxed">
-                Founded by two passionate specialists who share a vision of making quality orthopaedic and pediatric care accessible to families in Porur and across Chennai, ARVI Clinic has grown to become a trusted name in healthcare.
+                Founded by two passionate specialists who share a vision of making quality orthopaedic and Paediatric care accessible to families in Porur and across Chennai, ARVI Clinic has grown to become a trusted name in healthcare.
               </p>
               <div className="grid grid-cols-2 gap-4">
                 {[

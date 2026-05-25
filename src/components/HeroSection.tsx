@@ -23,13 +23,13 @@ export default function HeroSection() {
               <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-[#0A3D62] leading-tight font-heading">
                 Advanced
                 <span className="block text-[#0F9FA8]">Orthopaedic &</span>
-                <span className="block">Pediatric Care</span>
+                <span className="block">Paediatric Care</span>
               </h1>
               <p className="mt-4 text-xl text-[#3CB371] font-semibold italic">
                 "Helping You Move, Helping Them Grow"
               </p>
               <p className="mt-4 text-gray-600 text-lg leading-relaxed max-w-lg">
-                Comprehensive orthopaedic surgery and pediatric care under one roof. Expert specialists dedicated to your family's health and well-being.
+                Comprehensive orthopaedic surgery and Paediatric care under one roof. Expert specialists dedicated to your family's health and well-being.
               </p>
             </div>
 

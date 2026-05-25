@@ -30,13 +30,13 @@ export default function ChildCare() {
       <section className="py-20 bg-gradient-to-br from-[#e8f5e9] to-[#f0fff4] relative overflow-hidden">
         <div className="max-w-7xl mx-auto px-4">
           <div className="max-w-2xl">
-            <span className="text-[#3CB371] text-sm font-semibold tracking-widest uppercase">Pediatric Excellence</span>
+            <span className="text-[#3CB371] text-sm font-semibold tracking-widest uppercase">Paediatric Excellence</span>
             <h1 className="mt-3 text-4xl md:text-5xl font-bold text-[#0A3D62] font-heading leading-tight">
               Expert Child Care<br />
               <span className="text-[#3CB371]">With Compassion</span>
             </h1>
             <p className="mt-5 text-gray-600 text-lg leading-relaxed">
-              Comprehensive pediatric care by Dr. Vishali G (MD Paediatrics), Consultant Paediatrician dedicated to your child's health and development.
+              Comprehensive Paediatric care by Dr. Vishali G (MD Paediatrics), Consultant Paediatrician dedicated to your child's health and development.
             </p>
             <div className="flex flex-wrap gap-4 mt-8">
               <Link to="/appointment" className="btn-green text-base px-7 py-4">
@@ -55,7 +55,7 @@ export default function ChildCare() {
         <div className="max-w-7xl mx-auto px-4">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div className="space-y-5">
-              <span className="text-[#3CB371] text-sm font-semibold tracking-widest uppercase">Our Pediatric Specialist</span>
+              <span className="text-[#3CB371] text-sm font-semibold tracking-widest uppercase">Our Paediatric Specialist</span>
               <h2 className="text-3xl font-bold text-[#0A3D62] font-heading">Dr. Vishali G</h2>
               <p className="text-[#3CB371] font-semibold">MD Paediatrics | Consultant Paediatrician</p>
               <p className="text-gray-600 leading-relaxed">
@@ -94,7 +94,7 @@ export default function ChildCare() {
       <section className="py-20 bg-[#F5F7FA]">
         <div className="max-w-7xl mx-auto px-4">
           <div className="text-center mb-12">
-            <span className="text-[#3CB371] text-sm font-semibold tracking-widest uppercase">Pediatric Services</span>
+            <span className="text-[#3CB371] text-sm font-semibold tracking-widest uppercase">Paediatric Services</span>
             <h2 className="mt-3 text-3xl font-bold text-[#0A3D62] font-heading">Complete Child Healthcare</h2>
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -115,7 +115,7 @@ export default function ChildCare() {
           <div className="text-center mb-12">
             <span className="text-[#3CB371] text-sm font-semibold tracking-widest uppercase">Immunization</span>
             <h2 className="mt-3 text-3xl font-bold text-[#0A3D62] font-heading">Vaccination Schedule</h2>
-            <p className="mt-3 text-gray-600">Following IAP (Indian Academy of Pediatrics) recommended immunization schedule</p>
+            <p className="mt-3 text-gray-600">Following IAP (Indian Academy of Paediatrics) recommended immunization schedule</p>
           </div>
           <div className="overflow-x-auto rounded-2xl shadow-card">
             <table className="w-full">

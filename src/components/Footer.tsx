@@ -16,7 +16,7 @@ export default function Footer() {
               </div>
             </div>
             <p className="text-blue-200 text-sm leading-relaxed mb-5">
-              Advanced Orthopaedic & Pediatric care in Porur, Chennai. Expert specialists dedicated to your family's health and well-being.
+              Advanced Orthopaedic & Paediatric care in Porur, Chennai. Expert specialists dedicated to your family's health and well-being.
             </p>
             <div className="flex gap-3">
               {[
@@ -41,7 +41,7 @@ export default function Footer() {
                 { label: 'Home', href: '/' },
                 { label: 'About Us', href: '/about' },
                 { label: 'Orthopaedic Care', href: '/orthopaedic' },
-                { label: 'Pediatric Care', href: '/child-care' },
+                { label: 'Paediatric Care', href: '/child-care' },
                 { label: 'Our Doctors', href: '/doctors' },
                 { label: 'Gallery', href: '/gallery' },
                 { label: 'Contact', href: '/contact' },

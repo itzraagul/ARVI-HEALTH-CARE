@@ -17,7 +17,7 @@ const faqs = [
   },
   {
     q: 'Is the clinic child-friendly?',
-    a: "Absolutely! Our clinic is specially designed to be welcoming for children. Dr. Vishali's pediatric section has a child-friendly setup to help kids feel at ease.",
+    a: "Absolutely! Our clinic is specially designed to be welcoming for children. Dr. Vishali's Paediatric section has a child-friendly setup to help kids feel at ease.",
   },
   {
     q: 'Can I get physiotherapy services at home?',

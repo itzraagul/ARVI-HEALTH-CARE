@@ -44,7 +44,7 @@ const services = [
   },
   {
     title: 'Child Consultation',
-    description: 'Comprehensive pediatric consultations for all childhood illnesses, developmental concerns, and wellness checks.',
+    description: 'Comprehensive Paediatric consultations for all childhood illnesses, developmental concerns, and wellness checks.',
     icon: (
       <svg viewBox="0 0 64 64" fill="none" className="w-8 h-8"><circle cx="32" cy="18" r="10" stroke="currentColor" strokeWidth="2.5"/><path d="M16 50c0-8.837 7.163-16 16-16s16 7.163 16 16" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/><path d="M44 30l4-4m0 0l4-4m-4 4l4 4m-4-4l-4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
     ),
@@ -91,7 +91,7 @@ export default function ServicesSection() {
             Comprehensive Medical Services
           </h2>
           <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
-            From orthopaedic surgeries to pediatric wellness checks, we provide a full spectrum of medical care for your entire family.
+            From orthopaedic surgeries to Paediatric wellness checks, we provide a full spectrum of medical care for your entire family.
           </p>
         </div>
 
