@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Calendar, MessageSquare, LogOut, RefreshCw,
   CheckCircle, XCircle, Clock, ChevronRight, Search, Upload,
   Image as ImageIcon, Film, Trash2, Users, Lock, Eye, EyeOff, Heart, Plus, ChevronDown, ChevronUp, FileText,
-  Plus, Edit2, UserCheck, UserX, AlertCircle, X, Globe,
+  Edit2, UserCheck, UserX, AlertCircle, X, Globe, Play,
   MessageCircle, ToggleLeft, ToggleRight, History, Send, Reply,
   Tag, FolderOpen
 } from 'lucide-react';
@@ -684,69 +684,637 @@ export default function Admin() {
     if (!isMasterAdmin) return;
     setMediaLoading(true);
     try {
-      // Primary: fetch all gallery_items (no filter — show ALL including hidden)
-      const { data: dbItems, error: dbErr } = await supabase
+      const { data: dbItems } = await supabase
         .from('gallery_items')
         .select('*')
         .order('created_at', { ascending: false });
-
-      if (dbErr) throw new Error('DB error: ' + dbErr.message);
-
-      const existingUrls = new Set((dbItems || []).map((i: MediaItem) => i.media_url));
-      const toInsert: any[] = [];
-
-      // Secondary: scan storage buckets for files not yet in DB
-      try {
-        const [imgResult, vidResult] = await Promise.all([
-          supabase.storage.from('clinic-images').list('', { limit: 500, offset: 0 }),
-          supabase.storage.from('clinic-videos').list('', { limit: 500, offset: 0 }),
-        ]);
-
-        for (const file of (imgResult.data || [])) {
-          if (!file.name || file.name === '.emptyFolderPlaceholder') continue;
-          const { data: u } = supabase.storage.from('clinic-images').getPublicUrl(file.name);
-          if (u?.publicUrl && !existingUrls.has(u.publicUrl)) {
-            existingUrls.add(u.publicUrl);
-            toInsert.push({
-              title: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
-              category: 'Clinic', media_url: u.publicUrl, media_type: 'image', is_published: true,
-            });
-          }
-        }
-        for (const file of (vidResult.data || [])) {
-          if (!file.name || file.name === '.emptyFolderPlaceholder') continue;
-          const { data: u } = supabase.storage.from('clinic-videos').getPublicUrl(file.name);
-          if (u?.publicUrl && !existingUrls.has(u.publicUrl)) {
-            existingUrls.add(u.publicUrl);
-            toInsert.push({
-              title: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
-              category: 'Videos', media_url: u.publicUrl, media_type: 'video', is_published: true,
-            });
-          }
-        }
-      } catch { /* storage scan is best-effort */ }
-
-      // Insert newly discovered items into DB
-      let synced: MediaItem[] = [];
-      if (toInsert.length > 0) {
-        const { data: ins } = await supabase.from('gallery_items').insert(toInsert).select();
-        synced = ins || [];
-        if (synced.length > 0) toast.info(`${synced.length} new file(s) synced from storage`);
-      }
-
-      // Final list: dedup by URL
-      const allItems = [...(dbItems || []), ...synced];
-      const seen = new Set<string>();
-      const deduped: MediaItem[] = [];
-      for (const item of allItems) {
-        if (!seen.has(item.media_url)) { seen.add(item.media_url); deduped.push(item); }
-      }
-      setMediaItems(deduped);
-    } catch (err: any) {
-      toast.error('Media load failed: ' + (err.message || 'unknown error'));
-    }
+      setMediaItems(dbItems || []);
+    } catch { toast.error('Failed to load media'); }
     setMediaLoading(false);
-  }, [isMasterAdmin]);
+  };rt { useEffect, useState, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  LayoutDashboard, Calendar, MessageSquare, LogOut, RefreshCw,
+  CheckCircle, XCircle, Clock, ChevronRight, Search, Upload,
+  Image as ImageIcon, Film, Trash2, Users, Lock, Eye, EyeOff, Heart, Plus, ChevronDown, ChevronUp, FileText,
+  Edit2, UserCheck, UserX, AlertCircle, X, Globe, Play,
+  MessageCircle, ToggleLeft, ToggleRight, History, Send, Reply,
+  Tag, FolderOpen
+} from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { authService } from '../lib/auth';
+import { toast } from '../lib/toast';
+
+
+type Appointment = {
+  id: string; patient_name: string; patient_phone: string; patient_email?: string;
+  doctor: string; appointment_date: string; appointment_time: string;
+  reason?: string; status: string; payment_status?: string;
+  whatsapp_sent?: boolean; created_at?: string;
+};
+type ContactMessage = {
+  id: string; name: string; phone: string; email?: string;
+  subject?: string; message: string; is_read?: boolean;
+  admin_reply?: string; replied_at?: string; created_at?: string;
+};
+type MediaItem = {
+  id: string; title: string; category: string; media_url: string;
+  media_type: string; thumbnail_url?: string; is_published?: boolean; created_at?: string;
+};
+type AdminUserRow = {
+  id: string; username: string; role: string; full_name: string; email: string; is_active: boolean;
+};
+type WaLog = {
+  id: string; patient_name: string; patient_phone: string;
+  message_sent: string; status: string; error_message?: string; created_at: string;
+};
+
+function fmtDate(d?: string) {
+  if (!d) return '';
+  return new Date(d + (d.includes('T') ? '' : 'T12:00:00'))
+    .toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+const doctorLabels: Record<string, string> = {
+  'dr-aravindasamy': 'Dr. Aravindasamy M',
+  'dr-vishali': 'Dr. Vishali G',
+  'physiotherapist': 'Physiotherapist Expert',
+};
+const statusColor: Record<string, string> = {
+  pending: 'bg-amber-100 text-amber-700',
+  approved: 'bg-green-100 text-green-700',
+  rejected: 'bg-red-100 text-red-700',
+  completed: 'bg-blue-100 text-blue-700',
+};
+const roleLabels: Record<string, string> = {
+  master_admin: 'Master Admin', doctor_aravind: 'Dr. Aravindasamy',
+  doctor_vishali: 'Dr. Vishali', clinic_assistant: 'Clinic Assistant', physiotherapist: 'Physiotherapist',
+};
+const CLINIC_NAME = 'ARVI Ortho & Child Care';
+const CLINIC_PHONE = '+91 96770 80778';
+const MEDIA_CATEGORIES = ['Clinic', 'Doctors', 'Promotions', 'Google Images', 'Videos'];
+
+// ─── WhatsApp: emoji-safe encoding ───────────────────────────────────────────
+function buildWaMessage(apt: Appointment): string {
+  const dateStr = fmtDate(apt.appointment_date);
+  const doctorName = doctorLabels[apt.doctor] || apt.doctor;
+  // Plain unicode string — emojis are native JS strings, no encoding issues
+  return [
+    `Hello ${apt.patient_name},`,
+    ``,
+    `✅ Your appointment has been *confirmed* successfully!`,
+    ``,
+    `📅 *Date:* ${dateStr}`,
+    `🕐 *Time:* ${apt.appointment_time}`,
+    `👨‍⚕️ *Doctor:* ${doctorName}`,
+    `🏥 *Clinic:* ${CLINIC_NAME}`,
+    ``,
+    `Please arrive 10 minutes before your scheduled time.`,
+    ``,
+    `For queries, call us at ${CLINIC_PHONE}.`,
+    ``,
+    `Thank you for choosing ${CLINIC_NAME}. We look forward to seeing you! 🙏`,
+  ].join('\n');
+}
+
+function cleanPhone(raw: string): string {
+  let p = raw.replace(/\D/g, '');
+  if (p.startsWith('0')) p = p.slice(1);
+  if (!p.startsWith('91') && p.length === 10) p = '91' + p;
+  return p;
+}
+
+// Validate no broken unicode replacement characters exist
+function hasCorruptChars(str: string): boolean {
+  return str.includes('\uFFFD') || /[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(str);
+}
+
+async function sendWhatsAppMessage(apt: Appointment): Promise<{ success: boolean; error?: string }> {
+  const message = buildWaMessage(apt);
+
+  // Validate message integrity before sending
+  if (hasCorruptChars(message)) {
+    console.error('WA message contains corrupt characters — aborted');
+    return { success: false, error: 'Message contains invalid characters' };
+  }
+
+  const phone = cleanPhone(apt.patient_phone);
+  if (!phone || phone.length < 10) {
+    return { success: false, error: 'Invalid phone number' };
+  }
+
+  // Use encodeURIComponent — handles all Unicode/emoji correctly for wa.me
+  const encoded = encodeURIComponent(message);
+  const waUrl = `https://wa.me/${phone}?text=${encoded}`;
+
+  try {
+    await supabase.from('whatsapp_logs').insert([{
+      appointment_id: apt.id,
+      patient_name: apt.patient_name,
+      patient_phone: apt.patient_phone,
+      message_sent: message,
+      status: 'sent',
+    }]);
+    await supabase.from('appointments').update({ whatsapp_sent: true }).eq('id', apt.id);
+  } catch { /* non-fatal */ }
+
+  window.open(waUrl, '_blank', 'noopener,noreferrer');
+  return { success: true };
+}
+
+// ─── Change Password Modal ────────────────────────────────────────────────────
+function ChangePasswordModal({ userId, targetName, onClose }: { userId: string; targetName?: string; onClose: () => void }) {
+  const [form, setForm] = useState({ current: '', newPw: '', confirm: '' });
+  const [showC, setShowC] = useState(false);
+  const [showN, setShowN] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault(); setError('');
+    if (form.newPw.length < 6) { setError('Min 6 characters required'); return; }
+    if (form.newPw !== form.confirm) { setError('Passwords do not match'); return; }
+    setLoading(true);
+    const r = await authService.changePassword(userId, form.current, form.newPw);
+    setLoading(false);
+    if (r.success) { toast.success('Password changed'); onClose(); }
+    else setError(r.error || 'Failed');
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-[#0A3D62]">Change Password{targetName ? ` — ${targetName}` : ""}</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {error && <div className="flex items-center gap-2 p-3 bg-red-50 text-red-600 text-sm rounded-xl"><AlertCircle size={16} />{error}</div>}
+          {[
+            { label: 'Current Password', field: 'current', show: showC, toggle: () => setShowC(v => !v) },
+            { label: 'New Password', field: 'newPw', show: showN, toggle: () => setShowN(v => !v) },
+            { label: 'Confirm New Password', field: 'confirm', show: showN, toggle: () => {} },
+          ].map(({ label, field, show, toggle }) => (
+            <div key={field}>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+              <div className="relative">
+                <input type={show ? 'text' : 'password'} value={(form as any)[field]}
+                  onChange={e => setForm({ ...form, [field]: e.target.value })} required
+                  className="w-full pl-4 pr-10 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none" />
+                {field !== 'confirm' && (
+                  <button type="button" onClick={toggle} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+                    {show ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium">Cancel</button>
+            <button type="submit" disabled={loading} className="flex-1 px-4 py-2.5 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold disabled:opacity-60">
+              {loading ? 'Saving...' : 'Change Password'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── User Modal ───────────────────────────────────────────────────────────────
+function UserModal({ user, onClose, onSave }: { user?: AdminUserRow | null; onClose: () => void; onSave: () => void }) {
+  const [form, setForm] = useState({
+    username: user?.username || '', full_name: user?.full_name || '',
+    email: user?.email || '', role: user?.role || 'clinic_assistant',
+    password: '', is_active: user?.is_active ?? true,
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const sha = async (t: string) => {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault(); setError('');
+    if (!form.username.trim() || !form.full_name.trim()) { setError('Username and full name required'); return; }
+    if (!user && form.password.length < 6) { setError('Password must be at least 6 characters'); return; }
+    setLoading(true);
+    try {
+      if (user) {
+        const upd: any = { full_name: form.full_name, email: form.email, role: form.role, is_active: form.is_active };
+        if (form.password) upd.password_hash = await sha(form.password);
+        const { error: e } = await supabase.from('admin_users').update(upd).eq('id', user.id);
+        if (e) throw e;
+        toast.success('User updated');
+      } else {
+        const { error: e } = await supabase.from('admin_users').insert([{
+          username: form.username.trim(), full_name: form.full_name.trim(),
+          email: form.email, role: form.role, is_active: form.is_active,
+          password_hash: await sha(form.password),
+        }]);
+        if (e) throw e;
+        toast.success('User created');
+      }
+      onSave(); onClose();
+    } catch (err: any) { setError(err.message || 'Failed'); toast.error('Save failed'); }
+    setLoading(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-[#0A3D62]">{user ? 'Edit User' : 'Add New User'}</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {error && <div className="flex items-center gap-2 p-3 bg-red-50 text-red-600 text-sm rounded-xl"><AlertCircle size={16} />{error}</div>}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Username *</label>
+              <input value={form.username} onChange={e => setForm({ ...form, username: e.target.value })}
+                disabled={!!user} required
+                className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none disabled:bg-gray-50" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+              <input value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required
+                className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+            <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
+              className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+            <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}
+              className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none">
+              {Object.entries(roleLabels).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{user ? 'New Password (blank = no change)' : 'Password *'}</label>
+            <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
+              placeholder={user ? 'Leave blank to keep current' : 'Set password'}
+              className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none" />
+          </div>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="rounded" />
+            <span className="text-sm text-gray-700">Account is active</span>
+          </label>
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium">Cancel</button>
+            <button type="submit" disabled={loading} className="flex-1 px-4 py-2.5 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold disabled:opacity-60">
+              {loading ? 'Saving...' : (user ? 'Update' : 'Create User')}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Reply Modal ──────────────────────────────────────────────────────────────
+function ReplyModal({ msg, onClose, onReplied }: { msg: ContactMessage; onClose: () => void; onReplied: (id: string, reply: string) => void }) {
+  const [reply, setReply] = useState(msg.admin_reply || '');
+  const [loading, setLoading] = useState(false);
+
+  const sendReply = async () => {
+    if (!reply.trim()) { toast.error('Please type a reply'); return; }
+    setLoading(true);
+    const { error } = await supabase.from('contact_messages').update({
+      admin_reply: reply.trim(),
+      replied_at: new Date().toISOString(),
+      is_read: true,
+    }).eq('id', msg.id);
+    setLoading(false);
+    if (error) { toast.error('Failed to save reply'); return; }
+    toast.success('Reply saved successfully');
+    onReplied(msg.id, reply.trim());
+    onClose();
+  };
+
+  // Open email client with pre-filled reply
+  const openEmailClient = () => {
+    if (!msg.email) { toast.error('No email address for this sender'); return; }
+    const subject = encodeURIComponent(`Re: ${msg.subject || 'Your enquiry at ARVI Ortho & Child Care'}`);
+    const body = encodeURIComponent(
+      `Dear ${msg.name},\n\n${reply}\n\nBest regards,\nARVI Ortho & Child Care\nPhone: ${CLINIC_PHONE}\nEmail: arviorthoandchildcare@gmail.com`
+    );
+    window.open(`mailto:${msg.email}?subject=${subject}&body=${body}`, '_blank');
+  };
+
+  const openWhatsApp = () => {
+    if (!msg.phone) { toast.error('No phone number for this sender'); return; }
+    const phone = cleanPhone(msg.phone);
+    const text = encodeURIComponent(`Dear ${msg.name},\n\n${reply}\n\nBest regards,\nARVI Ortho & Child Care\nPhone: ${CLINIC_PHONE}`);
+    window.open(`https://wa.me/${phone}?text=${text}`, '_blank', 'noopener,noreferrer');
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#0F9FA8]/10 flex items-center justify-center">
+              <Reply size={20} className="text-[#0F9FA8]" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-[#0A3D62]">Reply to {msg.name}</h2>
+              <p className="text-gray-400 text-xs">{msg.email} • {msg.phone}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
+        </div>
+
+        {/* Original message */}
+        <div className="bg-gray-50 rounded-xl p-4 mb-4">
+          <p className="text-xs text-gray-400 font-semibold uppercase mb-2">Original Message</p>
+          {msg.subject && <p className="font-semibold text-[#0A3D62] text-sm mb-1">{msg.subject}</p>}
+          <p className="text-gray-600 text-sm leading-relaxed">{msg.message}</p>
+          <p className="text-xs text-gray-400 mt-2">{new Date(msg.created_at!).toLocaleString('en-IN')}</p>
+        </div>
+
+        {/* Reply box */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-2">Your Reply</label>
+          <textarea value={reply} onChange={e => setReply(e.target.value)} rows={5}
+            placeholder="Type your reply here..."
+            className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-[#0F9FA8] focus:ring-2 focus:ring-[#0F9FA8]/10 outline-none text-sm resize-none" />
+        </div>
+
+        {/* Action buttons */}
+        <div className="flex flex-wrap gap-3">
+          <button onClick={sendReply} disabled={loading || !reply.trim()}
+            className="flex items-center gap-2 px-5 py-2.5 bg-[#0F9FA8] text-white rounded-xl font-semibold text-sm disabled:opacity-60 hover:bg-[#0a7a82]">
+            {loading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <CheckCircle size={16} />}
+            Save Reply
+          </button>
+          {msg.email && (
+            <button onClick={openEmailClient}
+              className="flex items-center gap-2 px-5 py-2.5 bg-blue-500 text-white rounded-xl font-semibold text-sm hover:bg-blue-600">
+              <Send size={16} />Send via Email
+            </button>
+          )}
+          {msg.phone && (
+            <button onClick={openWhatsApp}
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#25D366] text-white rounded-xl font-semibold text-sm hover:bg-[#1da851]">
+              <MessageCircle size={16} />Send via WhatsApp
+            </button>
+          )}
+          <button onClick={onClose} className="flex items-center gap-2 px-5 py-2.5 border border-gray-200 rounded-xl text-sm font-medium hover:bg-gray-50 ml-auto">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Add Google Image Modal ────────────────────────────────────────────────────
+function AddGoogleImageModal({ onClose, onAdded }: { onClose: () => void; onAdded: (item: MediaItem) => void }) {
+  const [url, setUrl] = useState('');
+  const [title, setTitle] = useState('');
+  const [preview, setPreview] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleAdd = async () => {
+    if (!url.trim()) { setError('Please enter an image URL'); return; }
+    setLoading(true);
+    const { data, error: err } = await supabase.from('gallery_items').insert([{
+      title: title.trim() || 'Google Image',
+      category: 'Google Images',
+      media_url: url.trim(),
+      media_type: 'image',
+      is_published: true,
+    }]).select().single();
+    setLoading(false);
+    if (err) { setError('Failed to add: ' + err.message); return; }
+    toast.success('Image added to Google Images album');
+    onAdded(data);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center"><Globe size={20} className="text-blue-600" /></div>
+            <h2 className="text-xl font-bold text-[#0A3D62]">Add Google Image URL</h2>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
+        </div>
+        <div className="space-y-4">
+          {error && <div className="flex items-center gap-2 p-3 bg-red-50 text-red-600 text-sm rounded-xl"><AlertCircle size={16} />{error}</div>}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Image URL *</label>
+            <div className="flex gap-2">
+              <input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://example.com/image.jpg"
+                className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none text-sm" />
+              <button onClick={() => { if (url.trim()) { setPreview(url.trim()); setError(''); } }} className="px-4 py-2.5 bg-gray-100 rounded-xl text-sm font-medium hover:bg-gray-200">Preview</button>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Title (Optional)</label>
+            <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Patient Review Photo"
+              className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none text-sm" />
+          </div>
+          {preview && (
+            <div className="rounded-xl overflow-hidden border border-gray-200">
+              <img src={preview} alt="preview" className="w-full max-h-48 object-contain p-2 bg-gray-50"
+                onError={() => setError('Image could not be loaded. Check the URL.')} />
+            </div>
+          )}
+          <div className="flex gap-3 pt-2">
+            <button onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium">Cancel</button>
+            <button onClick={handleAdd} disabled={loading || !url.trim()}
+              className="flex-1 px-4 py-2.5 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold disabled:opacity-60 flex items-center justify-center gap-2">
+              {loading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Plus size={16} />}
+              Add Image
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Change Category Modal ─────────────────────────────────────────────────────
+function ChangeCategoryModal({ item, onClose, onChanged }: { item: MediaItem; onClose: () => void; onChanged: (id: string, cat: string) => void }) {
+  const [category, setCategory] = useState(item.category);
+  const [loading, setLoading] = useState(false);
+
+  const handleSave = async () => {
+    setLoading(true);
+    const { error } = await supabase.from('gallery_items').update({ category }).eq('id', item.id);
+    setLoading(false);
+    if (error) { toast.error('Failed to update category'); return; }
+    toast.success('Category updated');
+    onChanged(item.id, category);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#0F9FA8]/10 flex items-center justify-center"><Tag size={20} className="text-[#0F9FA8]" /></div>
+            <h2 className="text-xl font-bold text-[#0A3D62]">Change Category</h2>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
+        </div>
+        <p className="text-sm text-gray-500 mb-4 truncate">File: <span className="font-medium text-[#0A3D62]">{item.title}</span></p>
+        <div className="space-y-2 mb-6">
+          {MEDIA_CATEGORIES.map(cat => (
+            <label key={cat} className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${category === cat ? 'border-[#0F9FA8] bg-[#0F9FA8]/5' : 'border-gray-200 hover:border-[#0F9FA8]/40'}`}>
+              <input type="radio" name="cat" value={cat} checked={category === cat} onChange={() => setCategory(cat)} className="text-[#0F9FA8]" />
+              <div className="flex items-center gap-2">
+                {cat === 'Google Images' && <Globe size={14} className="text-blue-500" />}
+                {cat === 'Videos' && <Film size={14} className="text-purple-500" />}
+                {cat === 'Doctors' && <span className="text-sm">👨‍⚕️</span>}
+                {cat === 'Clinic' && <span className="text-sm">🏥</span>}
+                {cat === 'Promotions' && <span className="text-sm">📣</span>}
+                <span className="text-sm font-medium text-gray-700">{cat}</span>
+              </div>
+            </label>
+          ))}
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium">Cancel</button>
+          <button onClick={handleSave} disabled={loading || category === item.category}
+            className="flex-1 px-4 py-2.5 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold disabled:opacity-60">
+            {loading ? 'Saving...' : 'Save Category'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Admin ───────────────────────────────────────────────────────────────
+export default function Admin() {
+  const navigate = useNavigate();
+  const user = authService.getCurrentUser();
+  const userRole = authService.getUserRole();
+
+  const [tab, setTab] = useState<Tab>('dashboard');
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [messages, setMessages] = useState<ContactMessage[]>([]);
+    const [adminUsers, setAdminUsers] = useState<AdminUserRow[]>([]);
+  const [waLogs, setWaLogs] = useState<WaLog[]>([]);
+  const [waEnabled, setWaEnabled] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [mediaLoading, setMediaLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [mediaCategory, setMediaCategory] = useState('All');
+  const [showChangePw, setShowChangePw] = useState(false);
+  const [changePwTarget, setChangePwTarget] = useState<{ id: string; name: string } | null>(null);
+
+  // ── Patient Stories state ─────────────────────────────────────────────────
+  type StoryMedia = { id: string; story_id: string; media_url: string; media_type: string; caption?: string; file_name?: string; sort_order: number; created_at?: string; };
+  type PatientStory = { id: string; patient_name: string; treatment: string; description?: string; is_published: boolean; created_at: string; media?: StoryMedia[]; };
+  const [storiesLoading, setStoriesLoading] = useState(false);
+  const [expandedStory, setExpandedStory] = useState<string | null>(null);
+  const [showAddStory, setShowAddStory] = useState(false);
+  const [addStoryName, setAddStoryName] = useState('');
+  const [addStoryTreatment, setAddStoryTreatment] = useState('');
+  const [addStoryDesc, setAddStoryDesc] = useState('');
+  const [addStoryLoading, setAddStoryLoading] = useState(false);
+  const [storyUploadingId, setStoryUploadingId] = useState<string | null>(null);
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [editUser, setEditUser] = useState<AdminUserRow | null>(null);
+  const [showGoogleModal, setShowGoogleModal] = useState(false);
+  const [replyMsg, setReplyMsg] = useState<ContactMessage | null>(null);
+  const [changeCatItem, setChangeCatItem] = useState<MediaItem | null>(null);
+  const [mediaUploading, setMediaUploading] = useState(false);
+  const mediaInputRef = useRef<HTMLInputElement>(null);
+
+  if (!user || !userRole) { navigate('/login'); return null; }
+
+  const isMasterAdmin = authService.isMasterAdmin();
+  const isClinicAssistant = userRole === 'clinic_assistant';
+  const canApprove = authService.canApproveAppointments();
+
+
+  const addPatientStory = async () => {
+    if (!addStoryName.trim() || !addStoryTreatment.trim()) { toast.error('Patient name and treatment are required'); return; }
+    setAddStoryLoading(true);
+    const { data, error } = await supabase.from('patient_stories')
+      .insert([{ patient_name: addStoryName.trim(), treatment: addStoryTreatment.trim(), description: addStoryDesc.trim(), is_published: true }])
+      .select().single();
+    if (error) { toast.error('Failed to create story'); setAddStoryLoading(false); return; }
+    setStories(prev => [{ ...data, media: [] }, ...prev]);
+    setAddStoryName(''); setAddStoryTreatment(''); setAddStoryDesc('');
+    setShowAddStory(false); setExpandedStory(data.id);
+    toast.success('Patient story created! Now upload media below.');
+    setAddStoryLoading(false);
+  };
+
+  const deleteStory = async (id: string) => {
+    if (!window.confirm('Delete this patient story and all its media? This cannot be undone.')) return;
+    await supabase.from('patient_stories').delete().eq('id', id);
+    setStories(prev => prev.filter(s => s.id !== id));
+    toast.success('Story deleted');
+  };
+
+  const toggleStoryPublish = async (story: PatientStory) => {
+    const { error } = await supabase.from('patient_stories').update({ is_published: !story.is_published }).eq('id', story.id);
+    if (!error) setStories(prev => prev.map(s => s.id === story.id ? { ...s, is_published: !s.is_published } : s));
+  };
+
+  const uploadStoryMedia = async (storyId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setStoryUploadingId(storyId);
+    let uploadCount = 0;
+    for (const file of Array.from(files)) {
+      const ext = file.name.split('.').pop();
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `stories/${storyId}/${Date.now()}_${safeName}`;
+      const { error: upErr } = await supabase.storage.from('patient-stories').upload(path, file, { upsert: false });
+      if (upErr) { toast.error(`Failed to upload ${file.name}: ${upErr.message}`); continue; }
+      const { data: urlData } = supabase.storage.from('patient-stories').getPublicUrl(path);
+      const mediaType = file.type.startsWith('video') ? 'video' : file.type === 'application/pdf' ? 'pdf' : file.type.includes('word') ? 'doc' : 'image';
+      const { data: inserted, error: insErr } = await supabase.from('patient_story_media')
+        .insert([{ story_id: storyId, media_url: urlData.publicUrl, media_type: mediaType, file_name: file.name, sort_order: Date.now() }])
+        .select().single();
+      if (insErr) { toast.error(`Failed to save ${file.name} record`); continue; }
+      if (inserted) {
+        setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: [...(s.media || []), inserted] } : s));
+        uploadCount++;
+      }
+    }
+    if (uploadCount > 0) toast.success(`${uploadCount} file${uploadCount > 1 ? 's' : ''} uploaded successfully!`);
+    setStoryUploadingId(null);
+    e.target.value = '';
+  };
+
+  const deleteStoryMedia = async (storyId: string, mediaId: string, mediaUrl: string) => {
+    if (!window.confirm('Delete this file permanently?')) return;
+    try {
+      const urlObj = new URL(mediaUrl);
+      const pathParts = urlObj.pathname.split('/patient-stories/');
+      if (pathParts.length > 1) {
+        const storagePath = decodeURIComponent(pathParts[1]);
+        await supabase.storage.from('patient-stories').remove([storagePath]);
+      }
+    } catch { /* ignore storage delete error */ }
+    const { error } = await supabase.from('patient_story_media').delete().eq('id', mediaId);
+    if (error) { toast.error('Failed to delete file'); return; }
+    setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: (s.media || []).filter(m => m.id !== mediaId) } : s));
+    toast.success('File deleted');
+  };
+
+
+
 
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { if (tab === 'media') loadMedia(); }, [tab, loadMedia]);
