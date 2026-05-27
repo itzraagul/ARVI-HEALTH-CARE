@@ -540,9 +540,25 @@ export default function Admin() {
   const isClinicAssistant = userRole === 'clinic_assistant';
   const canApprove = authService.canApproveAppointments();
 
+  // Auto-delete appointments older than 7 days from appointment_date
+  const autoDeleteOldAppointments = useCallback(async () => {
+    try {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 7);
+      const cutoffStr = cutoff.toISOString().split('T')[0]; // YYYY-MM-DD
+      await supabase
+        .from('appointments')
+        .delete()
+        .lt('appointment_date', cutoffStr);
+    } catch { /* non-fatal — silently ignore */ }
+  }, []);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
+      // Run auto-delete silently before loading
+      await autoDeleteOldAppointments();
+
       const [aptRes, msgRes] = await Promise.all([
         supabase.from('appointments').select('*').order('created_at', { ascending: false }),
         supabase.from('contact_messages').select('*').order('created_at', { ascending: false }),
@@ -565,7 +581,7 @@ export default function Admin() {
       }
     } catch { toast.error('Failed to load data'); }
     setLoading(false);
-  }, [isMasterAdmin]);
+  }, [isMasterAdmin, autoDeleteOldAppointments]);
 
   // ── Media load: fetch ALL gallery_items + sync storage buckets ────────────
   const loadMedia = useCallback(async () => {
