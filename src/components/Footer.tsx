@@ -88,7 +88,7 @@ export default function Footer() {
             <ul className="space-y-4">
               <li className="flex items-start gap-3 text-sm text-blue-200">
                 <MapPin size={16} className="text-[#0F9FA8] mt-0.5 flex-shrink-0" />
-                <span>Rasi Complex, Door No.116/1, Mount Poonamallee Road, Porur, Chennai – 600116</span>
+                <a href="https://maps.app.goo.gl/VyoNg3KmtathG7mn9?g_st=aw" target="_blank" rel="noopener noreferrer" className="hover:text-[#0F9FA8] transition-colors">Rasi Complex, Door No.116/1, Mount Poonamallee Road, Porur, Chennai – 600116</a>
               </li>
               <li>
                 <a href="tel:+919677080778" className="flex items-center gap-3 text-sm text-blue-200 hover:text-[#0F9FA8] transition-colors">
@@ -105,8 +105,8 @@ export default function Footer() {
               <li className="flex items-start gap-3 text-sm text-blue-200">
                 <Clock size={16} className="text-[#0F9FA8] mt-0.5 flex-shrink-0" />
                 <div>
-                  <p>Mon – Sat: 9:00 AM – 8:00 PM</p>
-                  <p>Sunday: 10:00 AM – 2:00 PM</p>
+                  <p>Mon – Sat: 10:00 AM – 10:00 PM</p>
+                  <p>Sunday: 10:00 AM – 06:00 PM</p>
                 </div>
               </li>
             </ul>

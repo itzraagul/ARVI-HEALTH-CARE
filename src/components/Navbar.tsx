@@ -64,7 +64,7 @@ export default function Navbar() {
               <Phone size={12} /> +91 96770 80778
             </a>
             <span className="opacity-50">|</span>
-            <span>Mon–Sat: 9AM–8PM | Sun: 10AM–2PM</span>
+            <span>Mon–Sat: 10AM–10PM | Sun: 10AM–06PM</span>
           </div>
         </div>
       </div>

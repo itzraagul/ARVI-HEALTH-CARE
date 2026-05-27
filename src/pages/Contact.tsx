@@ -38,24 +38,11 @@ export default function Contact() {
 
               {[
                 {
-    icon: MapPin,
-    title: 'Address',
-    content: (
-      <a
-        href="https://maps.app.goo.gl/VyoNg3KmtathG7mn9?g_st=aw"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="hover:underline"
-      >
-        Rasi Complex, Door No.116/1,
-        <br />
-        Mount Poonamallee Road,
-        <br />
-        Porur, Chennai – 600116
-      </a>
-    ),
-    color: 'bg-[#0F9FA8]',
-  },
+                  icon: MapPin,
+                  title: 'Address',
+                  content: 'Rasi Complex, Door No.116/1,\nMount Poonamallee Road,\nPorur, Chennai – 600116',
+                  color: 'bg-[#0F9FA8]',
+                },
                 {
                   icon: Phone,
                   title: 'Phone',
@@ -215,7 +202,7 @@ export default function Contact() {
               <p className="font-semibold text-[#0A3D62]">ARVI Ortho & Child Care</p>
               <p className="text-gray-500 text-sm mt-1">Rasi Complex, Mount Poonamallee Road, Porur, Chennai – 600116</p>
               <a
-                href="https://maps.app.goo.gl/kpoiXLXRUarDwB7TA"
+                href="https://maps.app.goo.gl/VyoNg3KmtathG7mn9?g_st=aw"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn-primary mt-4 mx-auto"

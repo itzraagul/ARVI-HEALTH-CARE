@@ -9,7 +9,7 @@ const faqs = [
   },
   {
     q: 'What are the consultation timings?',
-    a: 'We are open Monday to Saturday from 9:00 AM to 8:00 PM, and Sundays from 10:00 AM to 2:00 PM for OPD consultations.',
+    a: 'We are open Monday to Saturday from 10:00 AM to 10:00 PM, and Sundays from 10:00 AM to 6:00 PM for OPD consultations.',
   },
   {
     q: 'Does the clinic accept health insurance?',
@@ -17,7 +17,7 @@ const faqs = [
   },
   {
     q: 'Is the clinic child-friendly?',
-    a: "Absolutely! Our clinic is specially designed to be welcoming for children. Dr. Vishali's Paediatric section has a child-friendly setup to help kids feel at ease.",
+    a: "Absolutely! Our clinic is specially designed to be welcoming for children. Dr. Vishali's paediatric section has a child-friendly setup to help kids feel at ease.",
   },
   {
     q: 'Can I get physiotherapy services at home?',
