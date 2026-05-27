@@ -70,18 +70,18 @@ function buildWaMessage(apt: Appointment): string {
   return [
     `Hello ${apt.patient_name},`,
     ``,
-    `\u2705 Your appointment has been *confirmed* successfully!`,
+    `✅ Your appointment has been *confirmed* successfully!`,
     ``,
-    `\uD83D\uDCC5 *Date:* ${dateStr}`,
-    `\uD83D\uDD50 *Time:* ${apt.appointment_time}`,
-    `\uD83D\uDC68\u200D\u2695\uFE0F *Doctor:* ${doctorName}`,
-    `\uD83C\uDFE5 *Clinic:* ${CLINIC_NAME}`,
+    `📅 *Date:* ${dateStr}`,
+    `🕐 *Time:* ${apt.appointment_time}`,
+    `👨‍⚕️ *Doctor:* ${doctorName}`,
+    `🏥 *Clinic:* ${CLINIC_NAME}`,
     ``,
     `Please arrive 10 minutes before your scheduled time.`,
     ``,
     `For queries, call us at ${CLINIC_PHONE}.`,
     ``,
-    `Thank you for choosing ${CLINIC_NAME}. We look forward to seeing you! \uD83D\uDE4F`,
+    `Thank you for choosing ${CLINIC_NAME}. We look forward to seeing you! 🙏`,
   ].join('\n');
 }
 
@@ -131,7 +131,7 @@ async function sendWhatsAppMessage(apt: Appointment): Promise<{ success: boolean
 }
 
 // ─── Change Password Modal ────────────────────────────────────────────────────
-function ChangePasswordModal({ userId, onClose }: { userId: string; onClose: () => void }) {
+function ChangePasswordModal({ userId, targetName, onClose }: { userId: string; targetName?: string; onClose: () => void }) {
   const [form, setForm] = useState({ current: '', newPw: '', confirm: '' });
   const [showC, setShowC] = useState(false);
   const [showN, setShowN] = useState(false);
@@ -153,7 +153,7 @@ function ChangePasswordModal({ userId, onClose }: { userId: string; onClose: () 
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-[#0A3D62]">Change Password</h2>
+          <h2 className="text-xl font-bold text-[#0A3D62]">Change Password{targetName ? ` — ${targetName}` : ""}</h2>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -525,6 +525,7 @@ export default function Admin() {
   const [statusFilter, setStatusFilter] = useState('');
   const [mediaCategory, setMediaCategory] = useState('All');
   const [showChangePw, setShowChangePw] = useState(false);
+  const [changePwTarget, setChangePwTarget] = useState<{ id: string; name: string } | null>(null);
   const [showUserModal, setShowUserModal] = useState(false);
   const [editUser, setEditUser] = useState<AdminUserRow | null>(null);
   const [showGoogleModal, setShowGoogleModal] = useState(false);
@@ -667,6 +668,14 @@ export default function Admin() {
     const result = await sendWhatsAppMessage(apt);
     if (result.success) toast.success('WhatsApp opened');
     else toast.error(result.error || 'Failed');
+  };
+
+  const deleteMessage = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this message? This cannot be undone.")) return;
+    const { error } = await supabase.from("contact_messages").delete().eq("id", id);
+    if (error) { toast.error("Failed to delete message"); return; }
+    setMessages(prev => prev.filter(m => m.id !== id));
+    toast.success("Message deleted");
   };
 
   const markRead = async (id: string) => {
@@ -1007,11 +1016,17 @@ export default function Admin() {
                       </div>
                     )}
 
-                    {/* Reply button */}
-                    <button onClick={() => setReplyMsg(msg)}
-                      className="mt-3 flex items-center gap-2 px-4 py-2 bg-[#0F9FA8]/10 text-[#0F9FA8] rounded-xl text-sm font-semibold hover:bg-[#0F9FA8]/20 transition-colors">
-                      <Reply size={15} />{msg.admin_reply ? 'Edit Reply' : 'Reply'}
-                    </button>
+                    {/* Action buttons */}
+                    <div className="mt-3 flex items-center gap-2">
+                      <button onClick={() => setReplyMsg(msg)}
+                        className="flex items-center gap-2 px-4 py-2 bg-[#0F9FA8]/10 text-[#0F9FA8] rounded-xl text-sm font-semibold hover:bg-[#0F9FA8]/20 transition-colors">
+                        <Reply size={15} />{msg.admin_reply ? 'Edit Reply' : 'Reply'}
+                      </button>
+                      <button onClick={() => deleteMessage(msg.id)}
+                        className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-500 rounded-xl text-sm font-semibold hover:bg-red-100 transition-colors">
+                        <Trash2 size={15} />Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -1219,6 +1234,7 @@ export default function Admin() {
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
                             <button onClick={() => { setEditUser(u); setShowUserModal(true); }} className="p-2 text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10 rounded-lg"><Edit2 size={15} /></button>
+                            <button onClick={() => setChangePwTarget({ id: u.id, name: u.full_name })} className="p-2 text-gray-400 hover:text-[#0A3D62] hover:bg-[#0A3D62]/10 rounded-lg" title="Change Password"><Lock size={15} /></button>
                             <button onClick={() => toggleActive(u)} className={`p-2 rounded-lg ${u.is_active ? 'text-amber-500 hover:bg-amber-50' : 'text-green-500 hover:bg-green-50'}`}>
                               {u.is_active ? <UserX size={15} /> : <UserCheck size={15} />}
                             </button>
@@ -1266,6 +1282,7 @@ export default function Admin() {
 
       {/* Modals */}
       {showChangePw && <ChangePasswordModal userId={user.id} onClose={() => setShowChangePw(false)} />}
+      {changePwTarget && <ChangePasswordModal userId={changePwTarget.id} targetName={changePwTarget.name} onClose={() => setChangePwTarget(null)} />}
       {showUserModal && <UserModal user={editUser} onClose={() => { setShowUserModal(false); setEditUser(null); }} onSave={loadData} />}
       {showGoogleModal && <AddGoogleImageModal onClose={() => setShowGoogleModal(false)} onAdded={item => setMediaItems(prev => [item, ...prev])} />}
       {replyMsg && (
