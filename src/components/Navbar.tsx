@@ -19,6 +19,7 @@ const navLinks = [
     ],
   },
   { label: 'Gallery', href: '/gallery' },
+  { label: 'Patient Stories', href: '/gallery?tab=stories' },
   { label: 'Blog', href: '/blog' },
   { label: 'Ask Us', href: '/ask-us' },
   { label: 'Contact', href: '/contact' },

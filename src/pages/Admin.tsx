@@ -528,7 +528,7 @@ export default function Admin() {
   const [changePwTarget, setChangePwTarget] = useState<{ id: string; name: string } | null>(null);
 
   // ── Patient Stories state ─────────────────────────────────────────────────
-  type StoryMedia = { id: string; story_id: string; media_url: string; media_type: string; caption?: string; sort_order: number; };
+  type StoryMedia = { id: string; story_id: string; media_url: string; media_type: string; caption?: string; file_name?: string; sort_order: number; created_at?: string; };
   type PatientStory = { id: string; patient_name: string; treatment: string; description?: string; is_published: boolean; created_at: string; media?: StoryMedia[]; };
   const [stories, setStories] = useState<PatientStory[]>([]);
   const [storiesLoading, setStoriesLoading] = useState(false);
@@ -555,9 +555,15 @@ export default function Admin() {
 
   const loadStories = async () => {
     setStoriesLoading(true);
-    const { data } = await supabase.from('patient_stories').select('*, patient_story_media(*)')
+    const { data, error } = await supabase.from('patient_stories').select('*, patient_story_media(*)')
       .order('created_at', { ascending: false });
-    if (data) setStories(data.map((s: any) => ({ ...s, media: (s.patient_story_media || []).sort((a: StoryMedia, b: StoryMedia) => a.sort_order - b.sort_order) })));
+    if (error) { console.error('loadStories error:', error); toast.error('Failed to load patient stories'); }
+    if (data) setStories(data.map((s: any) => ({
+      ...s,
+      media: (s.patient_story_media || []).sort((a: StoryMedia, b: StoryMedia) =>
+        new Date(a.created_at || '').getTime() - new Date(b.created_at || '').getTime()
+      )
+    })));
     setStoriesLoading(false);
   };
 
@@ -591,26 +597,41 @@ export default function Admin() {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     setStoryUploadingId(storyId);
+    let uploadCount = 0;
     for (const file of Array.from(files)) {
       const ext = file.name.split('.').pop();
-      const path = `story_${storyId}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `stories/${storyId}/${Date.now()}_${safeName}`;
       const { error: upErr } = await supabase.storage.from('patient-stories').upload(path, file, { upsert: false });
-      if (upErr) { toast.error(`Failed to upload ${file.name}`); continue; }
+      if (upErr) { toast.error(`Failed to upload ${file.name}: ${upErr.message}`); continue; }
       const { data: urlData } = supabase.storage.from('patient-stories').getPublicUrl(path);
       const mediaType = file.type.startsWith('video') ? 'video' : file.type === 'application/pdf' ? 'pdf' : file.type.includes('word') ? 'doc' : 'image';
-      const { data: inserted } = await supabase.from('patient_story_media')
-        .insert([{ story_id: storyId, media_url: urlData.publicUrl, media_type: mediaType, sort_order: 0 }]).select().single();
-      if (inserted) setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: [...(s.media || []), inserted] } : s));
+      const { data: inserted, error: insErr } = await supabase.from('patient_story_media')
+        .insert([{ story_id: storyId, media_url: urlData.publicUrl, media_type: mediaType, file_name: file.name, sort_order: Date.now() }])
+        .select().single();
+      if (insErr) { toast.error(`Failed to save ${file.name} record`); continue; }
+      if (inserted) {
+        setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: [...(s.media || []), inserted] } : s));
+        uploadCount++;
+      }
     }
-    toast.success('Media uploaded successfully!');
+    if (uploadCount > 0) toast.success(`${uploadCount} file${uploadCount > 1 ? 's' : ''} uploaded successfully!`);
     setStoryUploadingId(null);
     e.target.value = '';
   };
 
   const deleteStoryMedia = async (storyId: string, mediaId: string, mediaUrl: string) => {
-    const path = mediaUrl.split('/patient-stories/')[1];
-    if (path) await supabase.storage.from('patient-stories').remove([path]);
-    await supabase.from('patient_story_media').delete().eq('id', mediaId);
+    if (!window.confirm('Delete this file permanently?')) return;
+    try {
+      const urlObj = new URL(mediaUrl);
+      const pathParts = urlObj.pathname.split('/patient-stories/');
+      if (pathParts.length > 1) {
+        const storagePath = decodeURIComponent(pathParts[1]);
+        await supabase.storage.from('patient-stories').remove([storagePath]);
+      }
+    } catch { /* ignore storage delete error */ }
+    const { error } = await supabase.from('patient_story_media').delete().eq('id', mediaId);
+    if (error) { toast.error('Failed to delete file'); return; }
     setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: (s.media || []).filter(m => m.id !== mediaId) } : s));
     toast.success('File deleted');
   };
@@ -1457,28 +1478,32 @@ export default function Admin() {
                             <p className="text-xs text-gray-400 mt-1.5">Supports: JPG, PNG, MP4, PDF, DOC, DOCX — multiple files at once</p>
                           </div>
 
-                          {/* Media grid */}
+                          {/* Media list — file names with preview and delete */}
                           {story.media && story.media.length > 0 ? (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                              {story.media.map(m => (
-                                <div key={m.id} className="relative rounded-xl overflow-hidden border border-gray-200 bg-gray-50 group">
-                                  {m.media_type === 'pdf' || m.media_type === 'doc' ? (
-                                    <a href={m.media_url} target="_blank" rel="noopener noreferrer"
-                                      className="flex flex-col items-center justify-center p-4 h-24 hover:bg-[#0F9FA8]/5">
-                                      <FileText size={28} className="text-[#0A3D62] mb-1" />
-                                      <span className="text-xs font-semibold text-[#0A3D62] uppercase">{m.media_type}</span>
-                                    </a>
-                                  ) : m.media_type === 'video' ? (
-                                    <div className="aspect-video bg-gradient-to-br from-[#0A3D62] to-[#0F9FA8] flex items-center justify-center">
-                                      <Play size={20} className="text-white" fill="white" />
-                                    </div>
-                                  ) : (
-                                    <img src={m.media_url} alt={m.caption || 'story media'}
-                                      className="w-full h-24 object-cover" loading="lazy" />
+                            <div className="space-y-2">
+                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">{story.media.length} file{story.media.length !== 1 ? 's' : ''} — in upload order</p>
+                              {story.media.map((m, idx) => (
+                                <div key={m.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 bg-gray-50 hover:bg-white transition-colors group">
+                                  <span className="text-xs text-gray-400 w-5 text-center flex-shrink-0">{idx + 1}</span>
+                                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${m.media_type === 'pdf' ? 'bg-red-50' : m.media_type === 'doc' ? 'bg-blue-50' : m.media_type === 'video' ? 'bg-purple-50' : 'bg-teal-50'}`}>
+                                    {m.media_type === 'pdf' ? <FileText size={18} className="text-red-500" /> :
+                                     m.media_type === 'doc' ? <FileText size={18} className="text-blue-500" /> :
+                                     m.media_type === 'video' ? <Play size={18} className="text-purple-500" /> :
+                                     <ImageIcon size={18} className="text-[#0F9FA8]" />}
+                                  </div>
+                                  <a href={m.media_url} target="_blank" rel="noopener noreferrer"
+                                    className="flex-1 min-w-0 hover:text-[#0F9FA8] transition-colors">
+                                    <p className="text-sm font-medium text-[#0A3D62] truncate group-hover:text-[#0F9FA8]">
+                                      {m.file_name || m.caption || m.media_url.split('/').pop() || 'Untitled file'}
+                                    </p>
+                                    <p className="text-xs text-gray-400 uppercase">{m.media_type} — click to open</p>
+                                  </a>
+                                  {m.media_type === 'image' && (
+                                    <img src={m.media_url} alt="preview" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy" />
                                   )}
                                   <button onClick={() => deleteStoryMedia(story.id, m.id, m.media_url)}
-                                    className="absolute top-1 right-1 w-6 h-6 rounded-full bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                    <X size={12} />
+                                    className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100">
+                                    <Trash2 size={15} />
                                   </button>
                                 </div>
                               ))}

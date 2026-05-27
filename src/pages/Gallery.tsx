@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { X, Play, Film, Heart, ChevronRight, FileText, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
@@ -10,7 +11,7 @@ type GalleryItem = {
 
 type StoryMedia = {
   id: string; story_id: string; media_url: string;
-  media_type: string; caption?: string; sort_order: number;
+  media_type: string; caption?: string; file_name?: string; sort_order: number; created_at?: string;
 };
 
 type PatientStory = {
@@ -36,7 +37,11 @@ const staticItems: GalleryItem[] = [
 type Lightbox = { url: string; type: string; title: string };
 
 export default function Gallery() {
-  const [activeTab, setActiveTab] = useState<'gallery' | 'stories'>('gallery');
+  const location = useLocation();
+  const [activeTab, setActiveTab] = useState<'gallery' | 'stories'>(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get('tab') === 'stories' ? 'stories' : 'gallery';
+  });
   const [activeCategory, setActiveCategory] = useState('All');
   const [lightbox, setLightbox] = useState<Lightbox | null>(null);
   const [dbItems, setDbItems] = useState<GalleryItem[]>([]);
@@ -62,7 +67,9 @@ export default function Gallery() {
         if (data) {
           setStories(data.map((s: any) => ({
             ...s,
-            media: (s.patient_story_media || []).sort((a: StoryMedia, b: StoryMedia) => a.sort_order - b.sort_order)
+            media: (s.patient_story_media || []).sort((a: StoryMedia, b: StoryMedia) =>
+            new Date(a.created_at || '').getTime() - new Date(b.created_at || '').getTime()
+          )
           })));
         }
         setStoriesLoading(false);
@@ -216,46 +223,49 @@ export default function Gallery() {
                       )}
 
                       {story.media && story.media.length > 0 ? (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
-                          {story.media.map(m => (
-                            <div key={m.id} className="rounded-xl overflow-hidden border border-gray-200 bg-gray-50">
-                              {isPdf(m.media_url) || isDoc(m.media_url) ? (
-                                // Document file
-                                <a href={m.media_url} target="_blank" rel="noopener noreferrer"
-                                  className="flex flex-col items-center justify-center p-6 hover:bg-[#0F9FA8]/5 transition-colors group">
-                                  <FileText size={40} className="text-[#0A3D62] group-hover:text-[#0F9FA8] transition-colors mb-2" />
-                                  <span className="text-xs font-semibold text-[#0A3D62] text-center group-hover:text-[#0F9FA8] transition-colors">
-                                    {m.caption || (isPdf(m.media_url) ? 'View PDF' : 'View Document')}
-                                  </span>
-                                  <span className="text-xs text-gray-400 mt-1 uppercase">
-                                    {isPdf(m.media_url) ? 'PDF' : 'DOC'}
-                                  </span>
-                                </a>
+                        <div className="space-y-2 mt-4">
+                          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
+                            {story.media.length} file{story.media.length !== 1 ? 's' : ''}
+                          </p>
+                          {story.media.map((m, idx) => (
+                            <div key={m.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 bg-gray-50 hover:bg-white hover:border-[#0F9FA8]/20 transition-all group">
+                              <span className="text-xs text-gray-300 w-5 text-center flex-shrink-0">{idx + 1}</span>
+                              <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${m.media_type === 'pdf' ? 'bg-red-50' : m.media_type === 'doc' ? 'bg-blue-50' : m.media_type === 'video' ? 'bg-purple-50' : 'bg-[#0F9FA8]/10'}`}>
+                                {m.media_type === 'pdf' ? <FileText size={18} className="text-red-500" /> :
+                                 m.media_type === 'doc' ? <FileText size={18} className="text-blue-500" /> :
+                                 m.media_type === 'video' ? <Play size={18} className="text-purple-500" /> :
+                                 <ImageIcon size={18} className="text-[#0F9FA8]" />}
+                              </div>
+                              {m.media_type === 'image' ? (
+                                <button className="flex-1 min-w-0 text-left" onClick={() => setLightbox({ url: m.media_url, type: 'image', title: m.file_name || m.caption || story.patient_name })}>
+                                  <p className="text-sm font-medium text-[#0A3D62] truncate group-hover:text-[#0F9FA8] transition-colors">
+                                    {m.file_name || m.caption || 'Image file'}
+                                  </p>
+                                  <p className="text-xs text-gray-400">click to view</p>
+                                </button>
                               ) : m.media_type === 'video' ? (
-                                // Video
-                                <div className="cursor-pointer" onClick={() => setLightbox({ url: m.media_url, type: 'video', title: m.caption || story.patient_name })}>
-                                  <div className="relative aspect-video bg-gradient-to-br from-[#0A3D62] to-[#0F9FA8] flex items-center justify-center">
-                                    <div className="w-12 h-12 rounded-full bg-white/20 border border-white/40 flex items-center justify-center hover:bg-white/40 transition-all">
-                                      <Play size={20} className="text-white ml-1" fill="white" />
-                                    </div>
-                                  </div>
-                                  {m.caption && <p className="text-xs text-gray-500 p-2 text-center">{m.caption}</p>}
-                                </div>
+                                <button className="flex-1 min-w-0 text-left" onClick={() => setLightbox({ url: m.media_url, type: 'video', title: m.file_name || m.caption || story.patient_name })}>
+                                  <p className="text-sm font-medium text-[#0A3D62] truncate group-hover:text-[#0F9FA8] transition-colors">
+                                    {m.file_name || m.caption || 'Video file'}
+                                  </p>
+                                  <p className="text-xs text-gray-400">click to play</p>
+                                </button>
                               ) : (
-                                // Image
-                                <div className="cursor-pointer" onClick={() => setLightbox({ url: m.media_url, type: 'image', title: m.caption || story.patient_name })}>
-                                  <img src={m.media_url} alt={m.caption || story.patient_name}
-                                    className="w-full object-cover hover:scale-105 transition-transform duration-300"
-                                    style={{ maxHeight: '200px' }}
-                                    loading="lazy" />
-                                  {m.caption && <p className="text-xs text-gray-500 p-2 text-center">{m.caption}</p>}
-                                </div>
+                                <a href={m.media_url} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-[#0A3D62] truncate group-hover:text-[#0F9FA8] transition-colors">
+                                    {m.file_name || m.caption || (m.media_type === 'pdf' ? 'PDF Document' : 'Document')}
+                                  </p>
+                                  <p className="text-xs text-gray-400">click to open</p>
+                                </a>
+                              )}
+                              {m.media_type === 'image' && (
+                                <img src={m.media_url} alt="preview" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy" />
                               )}
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <p className="text-gray-400 text-sm mt-4 italic">No media uploaded for this story yet.</p>
+                        <p className="text-gray-400 text-sm mt-4 italic">No files uploaded for this story yet.</p>
                       )}
                     </div>
                   )}
