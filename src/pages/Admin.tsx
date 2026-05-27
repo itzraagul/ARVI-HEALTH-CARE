@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Calendar, MessageSquare, LogOut, RefreshCw,
   CheckCircle, XCircle, Clock, ChevronRight, Search, Upload,
-  Image as ImageIcon, Film, Trash2, Users, Lock, Eye, EyeOff,
+  Image as ImageIcon, Film, Trash2, Users, Lock, Eye, EyeOff, Heart, Plus, ChevronDown, ChevronUp, FileText,
   Plus, Edit2, UserCheck, UserX, AlertCircle, X, Globe,
   MessageCircle, ToggleLeft, ToggleRight, History, Send, Reply,
   Tag, FolderOpen
@@ -12,7 +12,7 @@ import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
 import { toast } from '../lib/toast';
 
-type Tab = 'dashboard' | 'appointments' | 'messages' | 'media' | 'users' | 'settings' | 'whatsapp';
+type Tab = 'dashboard' | 'appointments' | 'messages' | 'media' | 'users' | 'settings' | 'whatsapp' | 'stories';
 
 type Appointment = {
   id: string; patient_name: string; patient_phone: string; patient_email?: string;
@@ -526,6 +526,19 @@ export default function Admin() {
   const [mediaCategory, setMediaCategory] = useState('All');
   const [showChangePw, setShowChangePw] = useState(false);
   const [changePwTarget, setChangePwTarget] = useState<{ id: string; name: string } | null>(null);
+
+  // ── Patient Stories state ─────────────────────────────────────────────────
+  type StoryMedia = { id: string; story_id: string; media_url: string; media_type: string; caption?: string; sort_order: number; };
+  type PatientStory = { id: string; patient_name: string; treatment: string; description?: string; is_published: boolean; created_at: string; media?: StoryMedia[]; };
+  const [stories, setStories] = useState<PatientStory[]>([]);
+  const [storiesLoading, setStoriesLoading] = useState(false);
+  const [expandedStory, setExpandedStory] = useState<string | null>(null);
+  const [showAddStory, setShowAddStory] = useState(false);
+  const [addStoryName, setAddStoryName] = useState('');
+  const [addStoryTreatment, setAddStoryTreatment] = useState('');
+  const [addStoryDesc, setAddStoryDesc] = useState('');
+  const [addStoryLoading, setAddStoryLoading] = useState(false);
+  const [storyUploadingId, setStoryUploadingId] = useState<string | null>(null);
   const [showUserModal, setShowUserModal] = useState(false);
   const [editUser, setEditUser] = useState<AdminUserRow | null>(null);
   const [showGoogleModal, setShowGoogleModal] = useState(false);
@@ -539,6 +552,68 @@ export default function Admin() {
   const isMasterAdmin = authService.isMasterAdmin();
   const isClinicAssistant = userRole === 'clinic_assistant';
   const canApprove = authService.canApproveAppointments();
+
+  const loadStories = async () => {
+    setStoriesLoading(true);
+    const { data } = await supabase.from('patient_stories').select('*, patient_story_media(*)')
+      .order('created_at', { ascending: false });
+    if (data) setStories(data.map((s: any) => ({ ...s, media: (s.patient_story_media || []).sort((a: StoryMedia, b: StoryMedia) => a.sort_order - b.sort_order) })));
+    setStoriesLoading(false);
+  };
+
+  const addPatientStory = async () => {
+    if (!addStoryName.trim() || !addStoryTreatment.trim()) { toast.error('Patient name and treatment are required'); return; }
+    setAddStoryLoading(true);
+    const { data, error } = await supabase.from('patient_stories')
+      .insert([{ patient_name: addStoryName.trim(), treatment: addStoryTreatment.trim(), description: addStoryDesc.trim(), is_published: true }])
+      .select().single();
+    if (error) { toast.error('Failed to create story'); setAddStoryLoading(false); return; }
+    setStories(prev => [{ ...data, media: [] }, ...prev]);
+    setAddStoryName(''); setAddStoryTreatment(''); setAddStoryDesc('');
+    setShowAddStory(false); setExpandedStory(data.id);
+    toast.success('Patient story created! Now upload media below.');
+    setAddStoryLoading(false);
+  };
+
+  const deleteStory = async (id: string) => {
+    if (!window.confirm('Delete this patient story and all its media? This cannot be undone.')) return;
+    await supabase.from('patient_stories').delete().eq('id', id);
+    setStories(prev => prev.filter(s => s.id !== id));
+    toast.success('Story deleted');
+  };
+
+  const toggleStoryPublish = async (story: PatientStory) => {
+    const { error } = await supabase.from('patient_stories').update({ is_published: !story.is_published }).eq('id', story.id);
+    if (!error) setStories(prev => prev.map(s => s.id === story.id ? { ...s, is_published: !s.is_published } : s));
+  };
+
+  const uploadStoryMedia = async (storyId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setStoryUploadingId(storyId);
+    for (const file of Array.from(files)) {
+      const ext = file.name.split('.').pop();
+      const path = `story_${storyId}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('patient-stories').upload(path, file, { upsert: false });
+      if (upErr) { toast.error(`Failed to upload ${file.name}`); continue; }
+      const { data: urlData } = supabase.storage.from('patient-stories').getPublicUrl(path);
+      const mediaType = file.type.startsWith('video') ? 'video' : file.type === 'application/pdf' ? 'pdf' : file.type.includes('word') ? 'doc' : 'image';
+      const { data: inserted } = await supabase.from('patient_story_media')
+        .insert([{ story_id: storyId, media_url: urlData.publicUrl, media_type: mediaType, sort_order: 0 }]).select().single();
+      if (inserted) setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: [...(s.media || []), inserted] } : s));
+    }
+    toast.success('Media uploaded successfully!');
+    setStoryUploadingId(null);
+    e.target.value = '';
+  };
+
+  const deleteStoryMedia = async (storyId: string, mediaId: string, mediaUrl: string) => {
+    const path = mediaUrl.split('/patient-stories/')[1];
+    if (path) await supabase.storage.from('patient-stories').remove([path]);
+    await supabase.from('patient_story_media').delete().eq('id', mediaId);
+    setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: (s.media || []).filter(m => m.id !== mediaId) } : s));
+    toast.success('File deleted');
+  };
 
   // Auto-delete appointments older than 7 days from appointment_date
   const autoDeleteOldAppointments = useCallback(async () => {
@@ -654,6 +729,7 @@ export default function Admin() {
 
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { if (tab === 'media') loadMedia(); }, [tab, loadMedia]);
+  useEffect(() => { if (tab === 'stories') loadStories(); }, [tab]);
 
   const updateStatus = async (id: string, newStatus: string) => {
     const { error } = await supabase.from('appointments')
@@ -787,6 +863,7 @@ export default function Admin() {
     { id: 'media' as Tab, label: 'Media Manager', icon: ImageIcon, show: isMasterAdmin },
     { id: 'users' as Tab, label: 'User Management', icon: Users, show: isMasterAdmin },
     { id: 'whatsapp' as Tab, label: 'WhatsApp', icon: MessageCircle, show: isMasterAdmin },
+    { id: 'stories' as Tab, label: 'Patient Stories', icon: Heart, show: isMasterAdmin },
     { id: 'settings' as Tab, label: 'My Settings', icon: Lock, show: true },
   ].filter(n => n.show);
 
@@ -1266,6 +1343,158 @@ export default function Admin() {
           )}
 
           {/* SETTINGS */}
+
+          {/* PATIENT STORIES */}
+          {tab === 'stories' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-2xl shadow-card p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-xl font-bold text-[#0A3D62]">Patient Stories</h2>
+                    <p className="text-gray-500 text-sm mt-1">{stories.length} stories — upload photos, videos, PDFs, and documents per patient</p>
+                  </div>
+                  <button onClick={() => setShowAddStory(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold hover:bg-[#0F9FA8]/90 transition-colors">
+                    <Plus size={16} />Add Patient Story
+                  </button>
+                </div>
+
+                {/* Add Story Form */}
+                {showAddStory && (
+                  <div className="mb-6 p-5 rounded-2xl border-2 border-[#0F9FA8]/30 bg-[#0F9FA8]/5">
+                    <h3 className="font-bold text-[#0A3D62] mb-4">New Patient Story</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="text-xs font-semibold text-gray-600 mb-1 block">Patient Name *</label>
+                        <input value={addStoryName} onChange={e => setAddStoryName(e.target.value)}
+                          placeholder="e.g. Rajesh Kumar"
+                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-gray-600 mb-1 block">Treatment / Condition *</label>
+                        <input value={addStoryTreatment} onChange={e => setAddStoryTreatment(e.target.value)}
+                          placeholder="e.g. Knee Replacement Surgery"
+                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
+                      </div>
+                    </div>
+                    <div className="mb-4">
+                      <label className="text-xs font-semibold text-gray-600 mb-1 block">Description (optional)</label>
+                      <textarea value={addStoryDesc} onChange={e => setAddStoryDesc(e.target.value)}
+                        placeholder="Brief description of the patient's journey and recovery..."
+                        rows={3}
+                        className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30 resize-none" />
+                    </div>
+                    <div className="flex gap-3">
+                      <button onClick={addPatientStory} disabled={addStoryLoading}
+                        className="px-5 py-2 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold hover:bg-[#0F9FA8]/90 disabled:opacity-50">
+                        {addStoryLoading ? 'Creating...' : 'Create Story'}
+                      </button>
+                      <button onClick={() => { setShowAddStory(false); setAddStoryName(''); setAddStoryTreatment(''); setAddStoryDesc(''); }}
+                        className="px-5 py-2 bg-gray-100 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-200">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {storiesLoading && <div className="flex justify-center py-8"><div className="w-8 h-8 border-2 border-[#0F9FA8]/30 border-t-[#0F9FA8] rounded-full animate-spin" /></div>}
+
+                {!storiesLoading && stories.length === 0 && (
+                  <div className="text-center py-12 text-gray-400">
+                    <Heart size={40} className="mx-auto mb-3 opacity-20" />
+                    <p>No patient stories yet. Click "Add Patient Story" to create one.</p>
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  {stories.map(story => (
+                    <div key={story.id} className="rounded-2xl border border-gray-200 overflow-hidden">
+                      {/* Story Header */}
+                      <div className="flex items-center justify-between p-4 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors"
+                        onClick={() => setExpandedStory(expandedStory === story.id ? null : story.id)}>
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#0F9FA8] to-[#0A3D62] flex items-center justify-center text-white font-bold flex-shrink-0">
+                            {story.patient_name.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="font-bold text-[#0A3D62]">{story.patient_name}</p>
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-[#0F9FA8]/10 text-[#0F9FA8] font-semibold">{story.treatment}</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs px-2 py-1 rounded-full font-semibold ${story.is_published ? 'bg-green-100 text-green-600' : 'bg-gray-200 text-gray-500'}`}>
+                            {story.is_published ? 'Published' : 'Hidden'}
+                          </span>
+                          <span className="text-xs text-gray-400">{story.media?.length || 0} files</span>
+                          <button onClick={e => { e.stopPropagation(); toggleStoryPublish(story); }}
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10 transition-colors" title="Toggle visibility">
+                            {story.is_published ? <Eye size={15} /> : <EyeOff size={15} />}
+                          </button>
+                          <button onClick={e => { e.stopPropagation(); deleteStory(story.id); }}
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete story">
+                            <Trash2 size={15} />
+                          </button>
+                          {expandedStory === story.id ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+                        </div>
+                      </div>
+
+                      {/* Story expanded content */}
+                      {expandedStory === story.id && (
+                        <div className="p-4 border-t border-gray-200">
+                          {story.description && <p className="text-gray-600 text-sm mb-4">{story.description}</p>}
+
+                          {/* Upload button */}
+                          <div className="mb-4">
+                            <label className="flex items-center gap-2 px-4 py-2.5 bg-[#0A3D62]/5 border-2 border-dashed border-[#0A3D62]/20 rounded-xl cursor-pointer hover:bg-[#0A3D62]/10 transition-colors w-fit">
+                              <Plus size={16} className="text-[#0A3D62]" />
+                              <span className="text-sm font-semibold text-[#0A3D62]">
+                                {storyUploadingId === story.id ? 'Uploading...' : 'Upload Files (Images, Videos, PDFs, Docs)'}
+                              </span>
+                              <input type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx" className="hidden"
+                                disabled={storyUploadingId === story.id}
+                                onChange={e => uploadStoryMedia(story.id, e)} />
+                            </label>
+                            <p className="text-xs text-gray-400 mt-1.5">Supports: JPG, PNG, MP4, PDF, DOC, DOCX — multiple files at once</p>
+                          </div>
+
+                          {/* Media grid */}
+                          {story.media && story.media.length > 0 ? (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                              {story.media.map(m => (
+                                <div key={m.id} className="relative rounded-xl overflow-hidden border border-gray-200 bg-gray-50 group">
+                                  {m.media_type === 'pdf' || m.media_type === 'doc' ? (
+                                    <a href={m.media_url} target="_blank" rel="noopener noreferrer"
+                                      className="flex flex-col items-center justify-center p-4 h-24 hover:bg-[#0F9FA8]/5">
+                                      <FileText size={28} className="text-[#0A3D62] mb-1" />
+                                      <span className="text-xs font-semibold text-[#0A3D62] uppercase">{m.media_type}</span>
+                                    </a>
+                                  ) : m.media_type === 'video' ? (
+                                    <div className="aspect-video bg-gradient-to-br from-[#0A3D62] to-[#0F9FA8] flex items-center justify-center">
+                                      <Play size={20} className="text-white" fill="white" />
+                                    </div>
+                                  ) : (
+                                    <img src={m.media_url} alt={m.caption || 'story media'}
+                                      className="w-full h-24 object-cover" loading="lazy" />
+                                  )}
+                                  <button onClick={() => deleteStoryMedia(story.id, m.id, m.media_url)}
+                                    className="absolute top-1 right-1 w-6 h-6 rounded-full bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <X size={12} />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-gray-400 text-sm italic">No files uploaded yet. Use the button above to upload.</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {tab === 'settings' && (
             <div className="max-w-xl space-y-6">
               <div className="bg-white rounded-2xl shadow-card p-6">
