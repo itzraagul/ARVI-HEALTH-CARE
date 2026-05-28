@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Calendar, MessageSquare, LogOut, RefreshCw,
   CheckCircle, XCircle, Clock, ChevronRight, Search, Upload,
-  Image as ImageIcon, Film, Trash2, Users, Lock, Eye, EyeOff, Heart, Plus, ChevronDown, ChevronUp, FileText, Play,
-  Edit2, UserCheck, UserX, AlertCircle, X, Globe,
+  Image as ImageIcon, Film, Trash2, Users, Lock, Eye, EyeOff,
+  Plus, Edit2, UserCheck, UserX, AlertCircle, X, Globe, Heart,
+  ChevronDown, ChevronUp, FileText, Play, Pin, PinOff,
   MessageCircle, ToggleLeft, ToggleRight, History, Send, Reply,
   Tag, FolderOpen
 } from 'lucide-react';
@@ -27,7 +28,7 @@ type ContactMessage = {
 };
 type MediaItem = {
   id: string; title: string; category: string; media_url: string;
-  media_type: string; thumbnail_url?: string; is_published?: boolean; created_at?: string;
+  media_type: string; thumbnail_url?: string; is_published?: boolean; is_pinned?: boolean; created_at?: string;
 };
 type AdminUserRow = {
   id: string; username: string; role: string; full_name: string; email: string; is_active: boolean;
@@ -527,7 +528,7 @@ export default function Admin() {
   const [showChangePw, setShowChangePw] = useState(false);
   const [changePwTarget, setChangePwTarget] = useState<{ id: string; name: string } | null>(null);
   // ── Patient Stories ──────────────────────────────────────────────────────
-  type StoryMedia = { id: string; story_id: string; media_url: string; media_type: string; caption?: string; file_name?: string; sort_order: number; created_at?: string; };
+  type StoryMedia = { id: string; story_id: string; media_url: string; media_type: string; caption?: string; file_name?: string; sort_order: number; is_pinned?: boolean; created_at?: string; thumbnail_url?: string; };
   type PatientStory = { id: string; patient_name: string; treatment: string; description?: string; is_published: boolean; created_at: string; media?: StoryMedia[]; };
   const [stories, setStories] = useState<PatientStory[]>([]);
   const [storiesLoading, setStoriesLoading] = useState(false);
@@ -559,13 +560,13 @@ export default function Admin() {
     const { data, error } = await supabase.from('patient_stories')
       .select('*, patient_story_media(*)')
       .order('created_at', { ascending: false });
-    if (error) toast.error('Failed to load patient stories: ' + error.message);
-    if (data) setStories(data.map((s: any) => ({
-      ...s,
-      media: (s.patient_story_media || []).sort((a: StoryMedia, b: StoryMedia) =>
-        new Date(a.created_at || '').getTime() - new Date(b.created_at || '').getTime()
-      )
-    })));
+    if (error) { toast.error('Failed to load stories: ' + error.message); setStoriesLoading(false); return; }
+    if (data) setStories(data.map((s: any) => {
+      const raw: StoryMedia[] = (s.patient_story_media || []).sort((a: StoryMedia, b: StoryMedia) =>
+        new Date(b.created_at || '').getTime() - new Date(a.created_at || '').getTime()
+      );
+      return { ...s, media: [...raw.filter(m => m.is_pinned), ...raw.filter(m => !m.is_pinned)] };
+    }));
     setStoriesLoading(false);
   };
 
@@ -575,18 +576,18 @@ export default function Admin() {
     const { data, error } = await supabase.from('patient_stories')
       .insert([{ patient_name: addStoryName.trim(), treatment: addStoryTreatment.trim(), description: addStoryDesc.trim(), is_published: true }])
       .select().single();
-    if (error) { toast.error('Failed to create story: ' + error.message); setAddStoryLoading(false); return; }
+    if (error) { toast.error('Failed: ' + error.message); setAddStoryLoading(false); return; }
     setStories(prev => [{ ...data, media: [] }, ...prev]);
     setAddStoryName(''); setAddStoryTreatment(''); setAddStoryDesc('');
     setShowAddStory(false); setExpandedStory(data.id);
-    toast.success('Patient story created! Upload files below.');
+    toast.success('Story created! Upload files below.');
     setAddStoryLoading(false);
   };
 
   const deleteStory = async (id: string) => {
-    if (!window.confirm('Delete this patient story and all its media?')) return;
+    if (!window.confirm('Delete this story and all its files?')) return;
     const { error } = await supabase.from('patient_stories').delete().eq('id', id);
-    if (error) { toast.error('Failed to delete story'); return; }
+    if (error) { toast.error('Failed to delete'); return; }
     setStories(prev => prev.filter(s => s.id !== id));
     toast.success('Story deleted');
   };
@@ -596,23 +597,55 @@ export default function Admin() {
     if (!error) setStories(prev => prev.map(s => s.id === story.id ? { ...s, is_published: !s.is_published } : s));
   };
 
+  const extractStoryVideoThumbnail = (file: File, storyId: string): Promise<string | null> =>
+    new Promise(resolve => {
+      const video = document.createElement('video');
+      video.preload = 'metadata'; video.muted = true; video.playsInline = true;
+      video.src = URL.createObjectURL(file);
+      video.onloadeddata = () => { video.currentTime = 1; };
+      video.onseeked = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        canvas.getContext('2d')?.drawImage(video, 0, 0);
+        canvas.toBlob(blob => {
+          URL.revokeObjectURL(video.src);
+          if (!blob) { resolve(null); return; }
+          const thumbFile = new File([blob], 'thumb.jpg', { type: 'image/jpeg' });
+          const thumbPath = `stories/${storyId}/thumb_${Date.now()}.jpg`;
+          supabase.storage.from('patient-stories').upload(thumbPath, thumbFile, { contentType: 'image/jpeg' })
+            .then(({ error }) => {
+              if (error) { resolve(null); return; }
+              const { data } = supabase.storage.from('patient-stories').getPublicUrl(thumbPath);
+              resolve(data.publicUrl);
+            });
+        }, 'image/jpeg', 0.8);
+      };
+      video.onerror = () => resolve(null);
+    });
+
   const uploadStoryMedia = async (storyId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     setStoryUploadingId(storyId);
     let uploaded = 0;
     for (const file of Array.from(files)) {
+      if (file.size > 209715200) { toast.error(`${file.name} exceeds 200MB`); continue; }
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
       const path = `stories/${storyId}/${Date.now()}_${safeName}`;
       const { error: upErr } = await supabase.storage.from('patient-stories').upload(path, file, { upsert: false });
-      if (upErr) { toast.error(`Failed to upload ${file.name}`); continue; }
+      if (upErr) { toast.error(`Upload failed: ${file.name} — ${upErr.message}`); continue; }
       const { data: urlData } = supabase.storage.from('patient-stories').getPublicUrl(path);
       const mediaType = file.type.startsWith('video') ? 'video' : file.type === 'application/pdf' ? 'pdf' : file.type.includes('word') ? 'doc' : 'image';
+      let thumbnailUrl: string | null = null;
+      if (mediaType === 'video') {
+        toast.info('Extracting thumbnail...');
+        thumbnailUrl = await extractStoryVideoThumbnail(file, storyId);
+      }
       const { data: ins, error: insErr } = await supabase.from('patient_story_media')
-        .insert([{ story_id: storyId, media_url: urlData.publicUrl, media_type: mediaType, file_name: file.name, sort_order: Date.now() }])
+        .insert([{ story_id: storyId, media_url: urlData.publicUrl, media_type: mediaType, file_name: file.name, thumbnail_url: thumbnailUrl, sort_order: Date.now(), is_pinned: false }])
         .select().single();
-      if (insErr) { toast.error(`DB error for ${file.name}`); continue; }
-      if (ins) { setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: [...(s.media || []), ins] } : s)); uploaded++; }
+      if (insErr) { toast.error(`DB error: ${insErr.message}`); continue; }
+      if (ins) { setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: [ins, ...(s.media || [])] } : s)); uploaded++; }
     }
     if (uploaded > 0) toast.success(`${uploaded} file${uploaded > 1 ? 's' : ''} uploaded!`);
     setStoryUploadingId(null);
@@ -623,10 +656,8 @@ export default function Admin() {
     if (!window.confirm('Delete this file permanently?')) return;
     try {
       const urlObj = new URL(mediaUrl);
-      const pathParts = urlObj.pathname.split('/patient-stories/');
-      if (pathParts.length > 1) {
-        await supabase.storage.from('patient-stories').remove([decodeURIComponent(pathParts[1])]);
-      }
+      const parts = urlObj.pathname.split('/patient-stories/');
+      if (parts.length > 1) await supabase.storage.from('patient-stories').remove([decodeURIComponent(parts[1])]);
     } catch { }
     const { error } = await supabase.from('patient_story_media').delete().eq('id', mediaId);
     if (error) { toast.error('Failed to delete file'); return; }
@@ -634,12 +665,20 @@ export default function Admin() {
     toast.success('File deleted');
   };
 
+  const toggleStoryMediaPin = async (storyId: string, m: StoryMedia) => {
+    const { error } = await supabase.from('patient_story_media').update({ is_pinned: !m.is_pinned }).eq('id', m.id);
+    if (!error) setStories(prev => prev.map(s => {
+      if (s.id !== storyId) return s;
+      const updated = (s.media || []).map(x => x.id === m.id ? { ...x, is_pinned: !m.is_pinned } : x);
+      return { ...s, media: [...updated.filter(x => x.is_pinned), ...updated.filter(x => !x.is_pinned)] };
+    }));
+    toast.success(m.is_pinned ? 'Unpinned' : '📌 Pinned to top');
+  };
+
   const autoDeleteOldAppointments = useCallback(async () => {
     try {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - 7);
-      const cutoffStr = cutoff.toISOString().split('T')[0];
-      await supabase.from('appointments').delete().lt('appointment_date', cutoffStr);
+      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 7);
+      await supabase.from('appointments').delete().lt('appointment_date', cutoff.toISOString().split('T')[0]);
     } catch { }
   }, []);
 
@@ -675,7 +714,9 @@ export default function Admin() {
     if (!isMasterAdmin) return;
     setMediaLoading(true);
     try {
-      const { data } = await supabase.from('gallery_items').select('*').order('created_at', { ascending: false });
+      const { data } = await supabase.from('gallery_items').select('*')
+        .order('is_pinned', { ascending: false })
+        .order('created_at', { ascending: false });
       setMediaItems(data || []);
     } catch { toast.error('Failed to load media'); }
     setMediaLoading(false);
@@ -717,11 +758,11 @@ export default function Admin() {
   };
 
   const deleteMessage = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this message? This cannot be undone.")) return;
-    const { error } = await supabase.from("contact_messages").delete().eq("id", id);
-    if (error) { toast.error("Failed to delete message"); return; }
+    if (!window.confirm('Delete this message permanently?')) return;
+    const { error } = await supabase.from('contact_messages').delete().eq('id', id);
+    if (error) { toast.error('Failed to delete message'); return; }
     setMessages(prev => prev.filter(m => m.id !== id));
-    toast.success("Message deleted");
+    toast.success('Message deleted');
   };
 
   const markRead = async (id: string) => {
@@ -729,13 +770,44 @@ export default function Admin() {
     setMessages(prev => prev.map(m => m.id === id ? { ...m, is_read: true } : m));
   };
 
+  const extractVideoThumbnail = (file: File): Promise<string | null> =>
+    new Promise(resolve => {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      video.src = URL.createObjectURL(file);
+      video.onloadeddata = () => {
+        video.currentTime = 1;
+      };
+      video.onseeked = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d')?.drawImage(video, 0, 0);
+        canvas.toBlob(blob => {
+          URL.revokeObjectURL(video.src);
+          if (!blob) { resolve(null); return; }
+          const thumbFile = new File([blob], 'thumb.jpg', { type: 'image/jpeg' });
+          const thumbName = `thumb_${Date.now()}.jpg`;
+          supabase.storage.from('clinic-images').upload(thumbName, thumbFile, { contentType: 'image/jpeg' })
+            .then(({ error }) => {
+              if (error) { resolve(null); return; }
+              const { data } = supabase.storage.from('clinic-images').getPublicUrl(thumbName);
+              resolve(data.publicUrl);
+            });
+        }, 'image/jpeg', 0.8);
+      };
+      video.onerror = () => resolve(null);
+    });
+
   const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files?.length) return;
     setMediaUploading(true);
     let uploaded = 0;
     for (const file of Array.from(files)) {
-      if (file.size > 52428800) { toast.error(`${file.name} too large (max 50MB)`); continue; }
+      if (file.size > 209715200) { toast.error(`${file.name} exceeds 200MB limit`); continue; }
       const isVideo = file.type.startsWith('video/');
       const isImage = file.type.startsWith('image/');
       if (!isVideo && !isImage) { toast.error(`Unsupported: ${file.name}`); continue; }
@@ -746,15 +818,22 @@ export default function Admin() {
         const { error: upErr } = await supabase.storage.from(bucket).upload(fileName, file, { contentType: file.type });
         if (upErr) { toast.error(`Upload failed: ${file.name} — ${upErr.message}`); continue; }
         const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(fileName);
+        let thumbnailUrl: string | null = null;
+        if (isVideo) {
+          toast.info('Extracting video thumbnail...');
+          thumbnailUrl = await extractVideoThumbnail(file);
+        }
         const { data: inserted } = await supabase.from('gallery_items').insert([{
           title: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
           category: isVideo ? 'Videos' : 'Clinic',
           media_url: urlData.publicUrl,
           media_type: isVideo ? 'video' : 'image',
+          thumbnail_url: thumbnailUrl,
           is_published: true,
+          is_pinned: false,
         }]).select().single();
         if (inserted) { setMediaItems(prev => [inserted, ...prev]); uploaded++; }
-      } catch { toast.error(`Error: ${file.name}`); }
+      } catch (err) { toast.error(`Error: ${file.name}`); }
     }
     if (uploaded > 0) toast.success(`${uploaded} file(s) uploaded`);
     setMediaUploading(false);
@@ -766,6 +845,17 @@ export default function Admin() {
     const { error } = await supabase.from('gallery_items').delete().eq('id', item.id);
     if (!error) { setMediaItems(prev => prev.filter(m => m.id !== item.id)); toast.success('Deleted'); }
     else toast.error('Delete failed');
+  };
+
+  const togglePin = async (item: MediaItem) => {
+    const { error } = await supabase.from('gallery_items').update({ is_pinned: !item.is_pinned }).eq('id', item.id);
+    if (!error) {
+      setMediaItems(prev => {
+        const updated = prev.map(m => m.id === item.id ? { ...m, is_pinned: !m.is_pinned } : m);
+        return [...updated.filter(m => m.is_pinned), ...updated.filter(m => !m.is_pinned)];
+      });
+      toast.success(item.is_pinned ? 'Unpinned' : '📌 Pinned to top');
+    }
   };
 
   const togglePublish = async (item: MediaItem) => {
@@ -1065,12 +1155,10 @@ export default function Admin() {
 
                     {/* Reply button */}
                     <div className="mt-3 flex items-center gap-2">
-                      <button onClick={() => setReplyMsg(msg)}
-                        className="flex items-center gap-2 px-4 py-2 bg-[#0F9FA8]/10 text-[#0F9FA8] rounded-xl text-sm font-semibold hover:bg-[#0F9FA8]/20 transition-colors">
+                      <button onClick={() => setReplyMsg(msg)} className="flex items-center gap-2 px-4 py-2 bg-[#0F9FA8]/10 text-[#0F9FA8] rounded-xl text-sm font-semibold hover:bg-[#0F9FA8]/20">
                         <Reply size={15} />{msg.admin_reply ? 'Edit Reply' : 'Reply'}
                       </button>
-                      <button onClick={() => deleteMessage(msg.id)}
-                        className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-500 rounded-xl text-sm font-semibold hover:bg-red-100 transition-colors">
+                      <button onClick={() => deleteMessage(msg.id)} className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-500 rounded-xl text-sm font-semibold hover:bg-red-100">
                         <Trash2 size={15} />Delete
                       </button>
                     </div>
@@ -1168,11 +1256,21 @@ export default function Admin() {
                           </button>
                         </div>
                         <div className="flex gap-2">
-                          <button onClick={() => togglePublish(item)}
+                          <button onClick={() => togglePin(item)}
+                title={item.is_pinned ? 'Unpin' : 'Pin to top'}
+                className={`p-1.5 rounded-lg transition-colors ${item.is_pinned ? 'text-amber-500 bg-amber-50' : 'text-gray-400 hover:text-amber-500 hover:bg-amber-50'}`}>
+                {item.is_pinned ? <Pin size={14} /> : <PinOff size={14} />}
+              </button>
+              <button onClick={() => togglePublish(item)}
                             className={`flex-1 text-xs py-1.5 rounded-lg font-medium transition-colors ${item.is_published ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'bg-[#0F9FA8]/10 text-[#0F9FA8] hover:bg-[#0F9FA8]/20'}`}>
                             {item.is_published ? 'Hide' : 'Publish'}
                           </button>
-                          <button onClick={() => deleteMedia(item)} className="px-3 py-1.5 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14} /></button>
+                          {item.is_pinned && (
+                <div className="absolute top-2 left-2 z-10 bg-amber-400 text-white text-xs px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                  <Pin size={10} /> Pinned
+                </div>
+              )}
+            <button onClick={() => deleteMedia(item)} className="px-3 py-1.5 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14} /></button>
                         </div>
                       </div>
                     </div>
@@ -1280,7 +1378,7 @@ export default function Admin() {
                         <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-xs font-semibold ${u.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>{u.is_active ? 'Active' : 'Inactive'}</span></td>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
-                            <button onClick={() => { setEditUser(u); setShowUserModal(true); }} className="p-2 text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10 rounded-lg" title="Edit User"><Edit2 size={15} /></button>
+                            <button onClick={() => { setEditUser(u); setShowUserModal(true); }} className="p-2 text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10 rounded-lg" title="Edit"><Edit2 size={15} /></button>
                             <button onClick={() => setChangePwTarget({ id: u.id, name: u.full_name })} className="p-2 text-gray-400 hover:text-[#0A3D62] hover:bg-[#0A3D62]/10 rounded-lg" title="Change Password"><Lock size={15} /></button>
                             <button onClick={() => toggleActive(u)} className={`p-2 rounded-lg ${u.is_active ? 'text-amber-500 hover:bg-amber-50' : 'text-green-500 hover:bg-green-50'}`}>
                               {u.is_active ? <UserX size={15} /> : <UserCheck size={15} />}
@@ -1319,40 +1417,36 @@ export default function Admin() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                       <div>
                         <label className="text-xs font-semibold text-gray-600 mb-1 block">Patient Name *</label>
-                        <input value={addStoryName} onChange={e => setAddStoryName(e.target.value)}
-                          placeholder="e.g. Rajesh Kumar"
+                        <input value={addStoryName} onChange={e => setAddStoryName(e.target.value)} placeholder="e.g. Rajesh Kumar"
                           className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
                       </div>
                       <div>
                         <label className="text-xs font-semibold text-gray-600 mb-1 block">Treatment *</label>
-                        <input value={addStoryTreatment} onChange={e => setAddStoryTreatment(e.target.value)}
-                          placeholder="e.g. Knee Replacement Surgery"
+                        <input value={addStoryTreatment} onChange={e => setAddStoryTreatment(e.target.value)} placeholder="e.g. Knee Replacement"
                           className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
                       </div>
                     </div>
                     <div className="mb-4">
                       <label className="text-xs font-semibold text-gray-600 mb-1 block">Description (optional)</label>
-                      <textarea value={addStoryDesc} onChange={e => setAddStoryDesc(e.target.value)}
-                        placeholder="Brief description of patient journey..." rows={3}
+                      <textarea value={addStoryDesc} onChange={e => setAddStoryDesc(e.target.value)} placeholder="Patient journey..." rows={3}
                         className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30 resize-none" />
                     </div>
                     <div className="flex gap-3">
                       <button onClick={addPatientStory} disabled={addStoryLoading}
-                        className="px-5 py-2 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold hover:bg-[#0F9FA8]/90 disabled:opacity-50">
+                        className="px-5 py-2 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold disabled:opacity-50">
                         {addStoryLoading ? 'Creating...' : 'Create Story'}
                       </button>
                       <button onClick={() => { setShowAddStory(false); setAddStoryName(''); setAddStoryTreatment(''); setAddStoryDesc(''); }}
-                        className="px-5 py-2 bg-gray-100 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-200">Cancel</button>
+                        className="px-5 py-2 bg-gray-100 text-gray-600 rounded-xl text-sm font-semibold">Cancel</button>
                     </div>
                   </div>
                 )}
 
                 {storiesLoading && <div className="flex justify-center py-8"><div className="w-8 h-8 border-2 border-[#0F9FA8]/30 border-t-[#0F9FA8] rounded-full animate-spin" /></div>}
-
                 {!storiesLoading && stories.length === 0 && (
                   <div className="text-center py-12 text-gray-400">
                     <Heart size={40} className="mx-auto mb-3 opacity-20" />
-                    <p>No patient stories yet. Click "Add Patient Story" to create one.</p>
+                    <p>No patient stories yet.</p>
                   </div>
                 )}
 
@@ -1376,11 +1470,11 @@ export default function Admin() {
                           </span>
                           <span className="text-xs text-gray-400">{story.media?.length || 0} files</span>
                           <button onClick={e => { e.stopPropagation(); toggleStoryPublish(story); }}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10" title="Toggle visibility">
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10">
                             {story.is_published ? <Eye size={15} /> : <EyeOff size={15} />}
                           </button>
                           <button onClick={e => { e.stopPropagation(); deleteStory(story.id); }}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50" title="Delete story">
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50">
                             <Trash2 size={15} />
                           </button>
                           {expandedStory === story.id ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
@@ -1400,7 +1494,7 @@ export default function Admin() {
                                 disabled={storyUploadingId === story.id}
                                 onChange={e => uploadStoryMedia(story.id, e)} />
                             </label>
-                            <p className="text-xs text-gray-400 mt-1">Supports JPG, PNG, MP4, PDF, DOCX — multiple files — up to 200MB each</p>
+                            <p className="text-xs text-gray-400 mt-1">JPG, PNG, MP4, PDF, DOCX · up to 200MB each · newest shown first · 📌 pin favorites to top</p>
                           </div>
 
                           {story.media && story.media.length > 0 ? (
@@ -1408,20 +1502,24 @@ export default function Admin() {
                               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{story.media.length} file{story.media.length !== 1 ? 's' : ''}</p>
                               {story.media.map((m, idx) => (
                                 <div key={m.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 bg-gray-50 hover:bg-white group">
-                                  <span className="text-xs text-gray-400 w-5 text-center">{idx + 1}</span>
+                                  <span className="text-xs text-gray-400 w-5 text-center">{m.is_pinned ? '📌' : idx + 1}</span>
                                   <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${m.media_type === 'pdf' ? 'bg-red-50' : m.media_type === 'doc' ? 'bg-blue-50' : m.media_type === 'video' ? 'bg-purple-50' : 'bg-teal-50'}`}>
                                     {m.media_type === 'pdf' ? <FileText size={18} className="text-red-500" /> :
                                      m.media_type === 'doc' ? <FileText size={18} className="text-blue-500" /> :
                                      m.media_type === 'video' ? <Play size={18} className="text-purple-500" /> :
                                      <ImageIcon size={18} className="text-[#0F9FA8]" />}
                                   </div>
-                                  <a href={m.media_url} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0 hover:text-[#0F9FA8]">
-                                    <p className="text-sm font-medium text-[#0A3D62] truncate">{m.file_name || m.caption || 'File'}</p>
-                                    <p className="text-xs text-gray-400 uppercase">{m.media_type} — click to open</p>
+                                  <a href={m.media_url} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-[#0A3D62] truncate">{m.file_name || 'File'}</p>
+                                    <p className="text-xs text-gray-400 uppercase">{m.media_type} · click to open</p>
                                   </a>
-                                  {m.media_type === 'image' && (
-                                    <img src={m.media_url} alt="preview" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy" />
-                                  )}
+                                  {(m.media_type === 'image') && <img src={m.media_url} alt="preview" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy" />}
+                                  {(m.media_type === 'video' && m.thumbnail_url) && <img src={m.thumbnail_url} alt="thumb" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy" />}
+                                  <button onClick={() => toggleStoryMediaPin(story.id, m)}
+                                    title={m.is_pinned ? 'Unpin' : 'Pin to top'}
+                                    className={`p-1.5 rounded-lg flex-shrink-0 transition-colors ${m.is_pinned ? 'text-amber-500 bg-amber-50' : 'text-gray-300 hover:text-amber-500 hover:bg-amber-50 opacity-0 group-hover:opacity-100'}`}>
+                                    {m.is_pinned ? <Pin size={14} /> : <PinOff size={14} />}
+                                  </button>
                                   <button onClick={() => deleteStoryMedia(story.id, m.id, m.media_url)}
                                     className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 flex-shrink-0">
                                     <Trash2 size={15} />
@@ -1430,7 +1528,7 @@ export default function Admin() {
                               ))}
                             </div>
                           ) : (
-                            <p className="text-gray-400 text-sm italic">No files uploaded yet.</p>
+                            <p className="text-gray-400 text-sm italic">No files yet. Upload above.</p>
                           )}
                         </div>
                       )}
