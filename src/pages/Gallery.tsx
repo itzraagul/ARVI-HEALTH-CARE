@@ -181,42 +181,41 @@ export default function Gallery() {
 
               {loading && <div className="flex justify-center py-12"><div className="w-8 h-8 border-2 border-[#0F9FA8]/30 border-t-[#0F9FA8] rounded-full animate-spin" /></div>}
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
+              <div className="columns-1 sm:columns-2 lg:columns-3 gap-5 space-y-5">
                 {visible.map(item => (
-                  <div key={item.id} className="flex flex-col cursor-pointer group"
+                  <div key={item.id}
+                    className="break-inside-avoid rounded-2xl overflow-hidden shadow-card cursor-pointer group card-hover relative"
                     onClick={() => setLightbox({ url: item.media_url, type: item.media_type, title: item.title })}>
-                    <div className="relative rounded-2xl overflow-hidden aspect-square bg-gray-100 shadow-sm group-hover:shadow-lg transition-all protected-media"
-                      onContextMenu={e => e.preventDefault()}>
+                    {item.is_pinned && (
+                      <span className="absolute top-2 left-2 z-10 bg-amber-400 text-white text-xs px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                        <Pin size={10} /> Featured
+                      </span>
+                    )}
+                    <div className="relative overflow-hidden protected-media" onContextMenu={e => e.preventDefault()}>
                       <div className="absolute inset-0 z-[5]" onContextMenu={e => e.preventDefault()} style={{WebkitUserSelect:'none',userSelect:'none'}} />
-                      {item.is_pinned && (
-                        <span className="absolute top-1.5 left-1.5 z-10 bg-amber-400 text-white text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5">
-                          <Pin size={8} /> Pinned
-                        </span>
-                      )}
                       {item.media_type === 'video' ? (
-                        <div className="absolute inset-0 bg-gradient-to-br from-[#0A3D62] to-[#0F9FA8]">
+                        <div className="relative aspect-video bg-gradient-to-br from-[#0A3D62] to-[#0F9FA8] flex items-center justify-center">
                           {item.thumbnail_url && (
                             <img src={item.thumbnail_url} alt={item.title}
-                              className="w-full h-full object-cover opacity-80 select-none"
+                              className="absolute inset-0 w-full h-full object-cover opacity-80 select-none"
                               draggable={false} onContextMenu={e => e.preventDefault()} />
                           )}
-                          <div className="absolute inset-0 flex items-center justify-center">
-                            <div className="w-10 h-10 rounded-full bg-white/30 border border-white/50 flex items-center justify-center group-hover:bg-white/50 transition-all">
-                              <Play size={18} className="text-white ml-0.5" fill="white" />
-                            </div>
+                          <div className="relative z-10 w-14 h-14 rounded-full bg-white/20 border border-white/40 flex items-center justify-center group-hover:bg-white/40 transition-all">
+                            <Play size={24} className="text-white ml-1" fill="white" />
                           </div>
                         </div>
                       ) : (
                         <img src={item.media_url} alt={item.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 select-none"
+                          className="w-full object-cover group-hover:scale-105 transition-transform duration-500 select-none"
                           loading="lazy" draggable={false}
                           onContextMenu={e => e.preventDefault()}
                           onError={() => setBrokenIds(prev => new Set([...prev, item.id]))} />
                       )}
-                    </div>
-                    <div className="mt-2 px-0.5">
-                      <p className="text-xs font-semibold text-[#0A3D62] truncate group-hover:text-[#0F9FA8] transition-colors" title={item.title}>{item.title}</p>
-                      <p className="text-[10px] text-gray-400 mt-0.5 uppercase">{item.category}</p>
+                      <div className="absolute inset-0 bg-gradient-to-t from-[#0A3D62]/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                      <div className="absolute bottom-0 left-0 right-0 p-4 translate-y-full group-hover:translate-y-0 transition-transform duration-300">
+                        <p className="text-white font-semibold text-sm">{item.title}</p>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-[#0F9FA8]/80 text-white mt-1 inline-block">{item.category}</span>
+                      </div>
                     </div>
                   </div>
                 ))}
