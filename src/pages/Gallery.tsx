@@ -181,38 +181,42 @@ export default function Gallery() {
 
               {loading && <div className="flex justify-center py-12"><div className="w-8 h-8 border-2 border-[#0F9FA8]/30 border-t-[#0F9FA8] rounded-full animate-spin" /></div>}
 
-              <div className="columns-1 sm:columns-2 lg:columns-3 gap-5 space-y-5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
                 {visible.map(item => (
-                  <div key={item.id}
-                    className="break-inside-avoid rounded-2xl overflow-hidden shadow-card cursor-pointer group card-hover relative"
+                  <div key={item.id} className="flex flex-col cursor-pointer group"
                     onClick={() => setLightbox({ url: item.media_url, type: item.media_type, title: item.title })}>
-                    {item.is_pinned && (
-                      <span className="absolute top-2 left-2 z-10 bg-amber-400 text-white text-xs px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
-                        <Pin size={10} /> Featured
-                      </span>
-                    )}
-                    <div className="relative overflow-hidden">
+                    <div className="relative rounded-2xl overflow-hidden aspect-square bg-gray-100 shadow-sm group-hover:shadow-lg transition-all protected-media"
+                      onContextMenu={e => e.preventDefault()}>
+                      <div className="absolute inset-0 z-[5]" onContextMenu={e => e.preventDefault()} style={{WebkitUserSelect:'none',userSelect:'none'}} />
+                      {item.is_pinned && (
+                        <span className="absolute top-1.5 left-1.5 z-10 bg-amber-400 text-white text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5">
+                          <Pin size={8} /> Pinned
+                        </span>
+                      )}
                       {item.media_type === 'video' ? (
-                        <div className="relative aspect-video bg-gradient-to-br from-[#0A3D62] to-[#0F9FA8] flex items-center justify-center">
-                          {item.thumbnail_url
-                            ? <img src={item.thumbnail_url} alt={item.title} className="absolute inset-0 w-full h-full object-cover opacity-80 select-none" draggable={false} onContextMenu={e => e.preventDefault()} />
-                            : null}
-                          <div className="relative z-10 w-14 h-14 rounded-full bg-white/20 border border-white/40 flex items-center justify-center group-hover:bg-white/40 transition-all">
-                            <Play size={24} className="text-white ml-1" fill="white" />
+                        <div className="absolute inset-0 bg-gradient-to-br from-[#0A3D62] to-[#0F9FA8]">
+                          {item.thumbnail_url && (
+                            <img src={item.thumbnail_url} alt={item.title}
+                              className="w-full h-full object-cover opacity-80 select-none"
+                              draggable={false} onContextMenu={e => e.preventDefault()} />
+                          )}
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="w-10 h-10 rounded-full bg-white/30 border border-white/50 flex items-center justify-center group-hover:bg-white/50 transition-all">
+                              <Play size={18} className="text-white ml-0.5" fill="white" />
+                            </div>
                           </div>
                         </div>
                       ) : (
                         <img src={item.media_url} alt={item.title}
-                          className="w-full object-cover group-hover:scale-105 transition-transform duration-500 protected-media select-none pointer-events-none"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 select-none"
                           loading="lazy" draggable={false}
                           onContextMenu={e => e.preventDefault()}
                           onError={() => setBrokenIds(prev => new Set([...prev, item.id]))} />
                       )}
-                      <div className="absolute inset-0 bg-gradient-to-t from-[#0A3D62]/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                      <div className="absolute bottom-0 left-0 right-0 p-4 translate-y-full group-hover:translate-y-0 transition-transform duration-300">
-                        <p className="text-white font-semibold text-sm">{item.title}</p>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-[#0F9FA8]/80 text-white mt-1 inline-block">{item.category}</span>
-                      </div>
+                    </div>
+                    <div className="mt-2 px-0.5">
+                      <p className="text-xs font-semibold text-[#0A3D62] truncate group-hover:text-[#0F9FA8] transition-colors" title={item.title}>{item.title}</p>
+                      <p className="text-[10px] text-gray-400 mt-0.5 uppercase">{item.category}</p>
                     </div>
                   </div>
                 ))}
@@ -256,44 +260,61 @@ export default function Gallery() {
                     <div className="px-6 pb-6 border-t border-gray-100">
                       {story.description && <p className="text-gray-600 text-sm leading-relaxed mt-4 mb-5">{story.description}</p>}
                       {story.media && story.media.length > 0 ? (
-                        <div className="space-y-2 mt-4">
+                        <div className="mt-4">
                           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
                             {story.media.length} file{story.media.length !== 1 ? 's' : ''}
-                            {story.media.some(m => m.is_pinned) && <span className="ml-2 text-amber-500">· 📌 pinned files shown first</span>}
+                            {story.media.some(m => m.is_pinned) && <span className="ml-2 text-amber-500">· 📌 pinned first</span>}
                           </p>
-                          {story.media.map((m, idx) => (
-                            <div key={m.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 bg-gray-50 hover:bg-white hover:border-[#0F9FA8]/20 transition-all group">
-                              <span className="text-xs text-gray-300 w-5 text-center flex-shrink-0">{m.is_pinned ? '📌' : idx + 1}</span>
-                              <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${m.media_type === 'pdf' ? 'bg-red-50' : m.media_type === 'doc' ? 'bg-blue-50' : m.media_type === 'video' ? 'bg-purple-50' : 'bg-[#0F9FA8]/10'}`}>
-                                {m.media_type === 'pdf' ? <FileText size={18} className="text-red-500" /> :
-                                 m.media_type === 'doc' ? <FileText size={18} className="text-blue-500" /> :
-                                 m.media_type === 'video' ? <Play size={18} className="text-purple-500" /> :
-                                 <ImageIcon size={18} className="text-[#0F9FA8]" />}
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                            {story.media.map(m => (
+                              <div key={m.id} className="flex flex-col group cursor-pointer">
+                                <div className="relative rounded-2xl overflow-hidden aspect-square bg-gray-100 shadow-sm group-hover:shadow-md transition-all"
+                                  onContextMenu={e => e.preventDefault()}>
+                                  {m.is_pinned && (
+                                    <span className="absolute top-1.5 left-1.5 z-10 bg-amber-400 text-white text-[10px] px-1.5 py-0.5 rounded-full font-semibold">📌</span>
+                                  )}
+                                  {m.media_type === 'image' ? (
+                                    <div className="w-full h-full" onClick={() => setLightbox({ url: m.media_url, type: 'image', title: m.file_name || story.patient_name })}>
+                                      <img src={m.media_url} alt={m.file_name || 'image'}
+                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 select-none"
+                                        draggable={false} onContextMenu={e => e.preventDefault()} loading="lazy" />
+                                    </div>
+                                  ) : m.media_type === 'video' ? (
+                                    <div className="w-full h-full bg-gradient-to-br from-[#0A3D62] to-[#0F9FA8]"
+                                      onClick={() => setLightbox({ url: m.media_url, type: 'video', title: m.file_name || story.patient_name })}>
+                                      {m.thumbnail_url && (
+                                        <img src={m.thumbnail_url} alt="thumb"
+                                          className="w-full h-full object-cover opacity-80 select-none"
+                                          draggable={false} onContextMenu={e => e.preventDefault()} loading="lazy" />
+                                      )}
+                                      <div className="absolute inset-0 flex items-center justify-center">
+                                        <div className="w-10 h-10 rounded-full bg-white/30 border border-white/50 flex items-center justify-center group-hover:bg-white/50 transition-all">
+                                          <Play size={18} className="text-white ml-0.5" fill="white" />
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : m.media_type === 'pdf' ? (
+                                    <a href={m.media_url} target="_blank" rel="noopener noreferrer"
+                                      className="w-full h-full flex flex-col items-center justify-center bg-red-50 hover:bg-red-100 transition-colors">
+                                      <FileText size={36} className="text-red-400 mb-1" />
+                                      <span className="text-[10px] font-bold text-red-400 uppercase">PDF</span>
+                                    </a>
+                                  ) : (
+                                    <a href={m.media_url} target="_blank" rel="noopener noreferrer"
+                                      className="w-full h-full flex flex-col items-center justify-center bg-blue-50 hover:bg-blue-100 transition-colors">
+                                      <FileText size={36} className="text-blue-400 mb-1" />
+                                      <span className="text-[10px] font-bold text-blue-400 uppercase">DOC</span>
+                                    </a>
+                                  )}
+                                </div>
+                                <div className="mt-2 px-0.5">
+                                  <p className="text-xs font-semibold text-[#0A3D62] truncate group-hover:text-[#0F9FA8] transition-colors"
+                                    title={m.file_name || 'File'}>{m.file_name || 'File'}</p>
+                                  <p className="text-[10px] text-gray-400 mt-0.5 uppercase">{m.media_type}</p>
+                                </div>
                               </div>
-                              {m.media_type === 'image' ? (
-                                <button className="flex-1 min-w-0 text-left" onClick={() => setLightbox({ url: m.media_url, type: 'image', title: m.file_name || story.patient_name })}>
-                                  <p className="text-sm font-medium text-[#0A3D62] truncate group-hover:text-[#0F9FA8] transition-colors">{m.file_name || 'Image file'}</p>
-                                  <p className="text-xs text-gray-400">click to view</p>
-                                </button>
-                              ) : m.media_type === 'video' ? (
-                                <button className="flex-1 min-w-0 text-left" onClick={() => setLightbox({ url: m.media_url, type: 'video', title: m.file_name || story.patient_name })}>
-                                  <p className="text-sm font-medium text-[#0A3D62] truncate group-hover:text-[#0F9FA8] transition-colors">{m.file_name || 'Video file'}</p>
-                                  <p className="text-xs text-gray-400">click to play</p>
-                                </button>
-                              ) : (
-                                <a href={m.media_url} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
-                                  <p className="text-sm font-medium text-[#0A3D62] truncate group-hover:text-[#0F9FA8] transition-colors">{m.file_name || 'Document'}</p>
-                                  <p className="text-xs text-gray-400">click to open</p>
-                                </a>
-                              )}
-                              {m.media_type === 'image' && (
-                                <img src={m.media_url} alt="preview" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0 select-none" loading="lazy" draggable={false} onContextMenu={e => e.preventDefault()} />
-                              )}
-                              {m.media_type === 'video' && m.thumbnail_url && (
-                                <img src={m.thumbnail_url} alt="thumb" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy" />
-                              )}
-                            </div>
-                          ))}
+                            ))}
+                          </div>
                         </div>
                       ) : (
                         <p className="text-gray-400 text-sm mt-4 italic">No files uploaded for this story yet.</p>
