@@ -565,7 +565,9 @@ export default function Admin() {
       const raw: StoryMedia[] = (s.patient_story_media || []).sort((a: StoryMedia, b: StoryMedia) =>
         new Date(b.created_at || '').getTime() - new Date(a.created_at || '').getTime()
       );
-      return { ...s, media: [...raw.filter(m => m.is_pinned), ...raw.filter(m => !m.is_pinned)] };
+      const pinned = raw.filter(m => m.is_pinned);
+      const unpinned = raw.filter(m => !m.is_pinned);
+      return { ...s, media: [...pinned, ...unpinned] };
     }));
     setStoriesLoading(false);
   };
@@ -642,7 +644,7 @@ export default function Admin() {
         thumbnailUrl = await extractStoryVideoThumbnail(file, storyId);
       }
       const { data: ins, error: insErr } = await supabase.from('patient_story_media')
-        .insert([{ story_id: storyId, media_url: urlData.publicUrl, media_type: mediaType, file_name: file.name, thumbnail_url: thumbnailUrl, sort_order: Date.now(), is_pinned: false }])
+        .insert([{ story_id: storyId, media_url: urlData.publicUrl, media_type: mediaType, file_name: file.name, thumbnail_url: thumbnailUrl, sort_order: Math.floor(Date.now() / 1000), is_pinned: false }])
         .select().single();
       if (insErr) { toast.error(`DB error: ${insErr.message}`); continue; }
       if (ins) { setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: [ins, ...(s.media || [])] } : s)); uploaded++; }
@@ -666,13 +668,15 @@ export default function Admin() {
   };
 
   const toggleStoryMediaPin = async (storyId: string, m: StoryMedia) => {
-    const { error } = await supabase.from('patient_story_media').update({ is_pinned: !m.is_pinned }).eq('id', m.id);
-    if (!error) setStories(prev => prev.map(s => {
+    const newVal = !m.is_pinned;
+    const { error } = await supabase.from('patient_story_media').update({ is_pinned: newVal }).eq('id', m.id);
+    if (error) { toast.error('Failed to update pin'); return; }
+    setStories(prev => prev.map(s => {
       if (s.id !== storyId) return s;
-      const updated = (s.media || []).map(x => x.id === m.id ? { ...x, is_pinned: !m.is_pinned } : x);
+      const updated = (s.media || []).map(x => x.id === m.id ? { ...x, is_pinned: newVal } : x);
       return { ...s, media: [...updated.filter(x => x.is_pinned), ...updated.filter(x => !x.is_pinned)] };
     }));
-    toast.success(m.is_pinned ? 'Unpinned' : '📌 Pinned to top');
+    toast.success(newVal ? '📌 Pinned to top' : 'Unpinned');
   };
 
   const autoDeleteOldAppointments = useCallback(async () => {
@@ -715,9 +719,12 @@ export default function Admin() {
     setMediaLoading(true);
     try {
       const { data } = await supabase.from('gallery_items').select('*')
-        .order('is_pinned', { ascending: false })
         .order('created_at', { ascending: false });
-      setMediaItems(data || []);
+      const sorted = data ? [
+        ...data.filter((m: MediaItem) => m.is_pinned),
+        ...data.filter((m: MediaItem) => !m.is_pinned),
+      ] : [];
+      setMediaItems(sorted);
     } catch { toast.error('Failed to load media'); }
     setMediaLoading(false);
   }, [isMasterAdmin]);
@@ -848,14 +855,14 @@ export default function Admin() {
   };
 
   const togglePin = async (item: MediaItem) => {
-    const { error } = await supabase.from('gallery_items').update({ is_pinned: !item.is_pinned }).eq('id', item.id);
-    if (!error) {
-      setMediaItems(prev => {
-        const updated = prev.map(m => m.id === item.id ? { ...m, is_pinned: !m.is_pinned } : m);
-        return [...updated.filter(m => m.is_pinned), ...updated.filter(m => !m.is_pinned)];
-      });
-      toast.success(item.is_pinned ? 'Unpinned' : '📌 Pinned to top');
-    }
+    const newVal = !item.is_pinned;
+    const { error } = await supabase.from('gallery_items').update({ is_pinned: newVal }).eq('id', item.id);
+    if (error) { toast.error('Failed to update pin'); return; }
+    setMediaItems(prev => {
+      const updated = prev.map(m => m.id === item.id ? { ...m, is_pinned: newVal } : m);
+      return [...updated.filter(m => m.is_pinned), ...updated.filter(m => !m.is_pinned)];
+    });
+    toast.success(newVal ? '📌 Pinned to top' : 'Unpinned');
   };
 
   const togglePublish = async (item: MediaItem) => {

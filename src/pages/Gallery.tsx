@@ -59,9 +59,18 @@ export default function Gallery() {
 
   useEffect(() => {
     supabase.from('gallery_items').select('*').eq('is_published', true)
-      .order('is_pinned', { ascending: false })
       .order('created_at', { ascending: false })
-      .then(({ data }) => { if (data?.length) setDbItems(data); setLoading(false); });
+      .then(({ data }) => {
+        if (data?.length) {
+          // Pinned first, then newest
+          const sorted = [
+            ...data.filter((i: GalleryItem) => i.is_pinned),
+            ...data.filter((i: GalleryItem) => !i.is_pinned),
+          ];
+          setDbItems(sorted);
+        }
+        setLoading(false);
+      });
   }, []);
 
   useEffect(() => {
