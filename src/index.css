@@ -114,3 +114,28 @@ div[id*="bolt-badge"],
   opacity: 0 !important;
   pointer-events: none !important;
 }
+
+/* ── Media Protection ────────────────────────────────────────── */
+.protected-media img,
+.protected-media video {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  pointer-events: none;
+}
+
+img {
+  -webkit-user-drag: none;
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+  user-drag: none;
+}
+
+/* Disable print for gallery section */
+@media print {
+  .gallery-protected {
+    display: none !important;
+  }
+}

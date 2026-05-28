@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { X, Play, Film, Heart, ChevronRight, FileText, Image as ImageIcon, Pin } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -40,6 +40,40 @@ type Lightbox = { url: string; type: string; title: string };
 
 export default function Gallery() {
   const location = useLocation();
+
+  // ── Media Protection ─────────────────────────────────────────────────────
+  useEffect(() => {
+    // Block right-click context menu on entire page
+    const blockContext = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.tagName === 'IMG' || t.tagName === 'VIDEO' || t.closest('.protected-media')) {
+        e.preventDefault();
+        return false;
+      }
+    };
+    // Block keyboard shortcuts: Ctrl+S, Ctrl+U, F12, Ctrl+Shift+I, Ctrl+Shift+J
+    const blockKeys = (e: KeyboardEvent) => {
+      const blocked = (
+        (e.ctrlKey && ['s','u','p'].includes(e.key.toLowerCase())) ||
+        (e.ctrlKey && e.shiftKey && ['i','j','c'].includes(e.key.toLowerCase())) ||
+        e.key === 'F12' || e.key === 'PrintScreen'
+      );
+      if (blocked) { e.preventDefault(); e.stopPropagation(); return false; }
+    };
+    // Block drag-and-drop of images
+    const blockDrag = (e: DragEvent) => {
+      if ((e.target as HTMLElement).tagName === 'IMG') e.preventDefault();
+    };
+    document.addEventListener('contextmenu', blockContext);
+    document.addEventListener('keydown', blockKeys);
+    document.addEventListener('dragstart', blockDrag);
+    return () => {
+      document.removeEventListener('contextmenu', blockContext);
+      document.removeEventListener('keydown', blockKeys);
+      document.removeEventListener('dragstart', blockDrag);
+    };
+  }, []);
+
   const getTabFromUrl = () => new URLSearchParams(location.search).get('tab') === 'stories' ? 'stories' : 'gallery';
 
   const [activeTab, setActiveTab] = useState<'gallery' | 'stories'>(getTabFromUrl);
@@ -161,7 +195,7 @@ export default function Gallery() {
                       {item.media_type === 'video' ? (
                         <div className="relative aspect-video bg-gradient-to-br from-[#0A3D62] to-[#0F9FA8] flex items-center justify-center">
                           {item.thumbnail_url
-                            ? <img src={item.thumbnail_url} alt={item.title} className="absolute inset-0 w-full h-full object-cover opacity-80" />
+                            ? <img src={item.thumbnail_url} alt={item.title} className="absolute inset-0 w-full h-full object-cover opacity-80 select-none" draggable={false} onContextMenu={e => e.preventDefault()} />
                             : null}
                           <div className="relative z-10 w-14 h-14 rounded-full bg-white/20 border border-white/40 flex items-center justify-center group-hover:bg-white/40 transition-all">
                             <Play size={24} className="text-white ml-1" fill="white" />
@@ -169,8 +203,9 @@ export default function Gallery() {
                         </div>
                       ) : (
                         <img src={item.media_url} alt={item.title}
-                          className="w-full object-cover group-hover:scale-105 transition-transform duration-500"
-                          loading="lazy"
+                          className="w-full object-cover group-hover:scale-105 transition-transform duration-500 protected-media select-none pointer-events-none"
+                          loading="lazy" draggable={false}
+                          onContextMenu={e => e.preventDefault()}
                           onError={() => setBrokenIds(prev => new Set([...prev, item.id]))} />
                       )}
                       <div className="absolute inset-0 bg-gradient-to-t from-[#0A3D62]/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
@@ -252,7 +287,7 @@ export default function Gallery() {
                                 </a>
                               )}
                               {m.media_type === 'image' && (
-                                <img src={m.media_url} alt="preview" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy" />
+                                <img src={m.media_url} alt="preview" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0 select-none" loading="lazy" draggable={false} onContextMenu={e => e.preventDefault()} />
                               )}
                               {m.media_type === 'video' && m.thumbnail_url && (
                                 <img src={m.thumbnail_url} alt="thumb" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy" />
@@ -274,13 +309,45 @@ export default function Gallery() {
 
       {/* Lightbox */}
       {lightbox && (
-        <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4" onClick={() => setLightbox(null)}>
-          <button className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-white/20 z-10" onClick={() => setLightbox(null)}><X size={20} /></button>
-          {lightbox.type === 'video'
-            ? <video src={lightbox.url} controls autoPlay className="max-w-full max-h-[85vh] rounded-2xl" onClick={e => e.stopPropagation()} />
-            : <img src={lightbox.url} alt={lightbox.title} className="max-w-full max-h-[90vh] rounded-2xl object-contain" onClick={e => e.stopPropagation()} />
-          }
-          <p className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/70 text-sm">{lightbox.title}</p>
+        <div
+          className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4"
+          onClick={() => setLightbox(null)}
+          onContextMenu={e => e.preventDefault()}
+          style={{WebkitUserSelect:'none', userSelect:'none'}}
+        >
+          <button className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-white/20 z-10" onClick={() => setLightbox(null)}>
+            <X size={20} />
+          </button>
+          {lightbox.type === 'video' ? (
+            <video
+              src={lightbox.url}
+              controls
+              autoPlay
+              controlsList="nodownload nofullscreen"
+              disablePictureInPicture
+              className="max-w-full max-h-[85vh] rounded-2xl"
+              onClick={e => e.stopPropagation()}
+              onContextMenu={e => e.preventDefault()}
+            />
+          ) : (
+            <div className="relative" onClick={e => e.stopPropagation()} onContextMenu={e => e.preventDefault()}>
+              <img
+                src={lightbox.url}
+                alt={lightbox.title}
+                className="max-w-full max-h-[90vh] rounded-2xl object-contain select-none"
+                draggable={false}
+                onContextMenu={e => e.preventDefault()}
+                style={{WebkitUserSelect:'none', userSelect:'none', pointerEvents:'none'}}
+              />
+              {/* Invisible overlay prevents right-click on image */}
+              <div
+                className="absolute inset-0 rounded-2xl"
+                onContextMenu={e => e.preventDefault()}
+                style={{background:'transparent', zIndex:10}}
+              />
+            </div>
+          )}
+          <p className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/70 text-sm select-none">{lightbox.title}</p>
         </div>
       )}
     </div>
