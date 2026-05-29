@@ -94,26 +94,15 @@ function cleanPhone(raw: string): string {
   return p;
 }
 
-// Validate no broken unicode replacement characters exist
-function hasCorruptChars(str: string): boolean {
-  return str.includes('\uFFFD') || /[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(str);
-}
-
 async function sendWhatsAppMessage(apt: Appointment): Promise<{ success: boolean; error?: string }> {
   const message = buildWaMessage(apt);
-
-  // Validate message integrity before sending
-  if (hasCorruptChars(message)) {
-    console.error('WA message contains corrupt characters — aborted');
-    return { success: false, error: 'Message contains invalid characters' };
-  }
 
   const phone = cleanPhone(apt.patient_phone);
   if (!phone || phone.length < 10) {
     return { success: false, error: 'Invalid phone number' };
   }
 
-  // Use encodeURIComponent — handles all Unicode/emoji correctly for wa.me
+  // encodeURIComponent correctly handles all Unicode/emoji for wa.me links
   const encoded = encodeURIComponent(message);
   const waUrl = `https://wa.me/${phone}?text=${encoded}`;
 
@@ -542,10 +531,18 @@ export default function Admin() {
   const [storyUploadingId, setStoryUploadingId] = useState<string | null>(null);
 
   // ── Leave Management ──────────────────────────────────────────────────────
-  type LeaveRecord = { id: string; leave_type: string; user_id?: string; clinic_name?: string; start_date: string; end_date: string; full_day: boolean; reason?: string; status: string; created_at: string; };
+  type LeaveRecord = {
+    id: string; specialist: string; start_date: string; end_date: string;
+    full_day: boolean; half_day_period?: string; time_from?: string; time_to?: string;
+    reason?: string; status: string; created_at: string;
+  };
   const [leaves, setLeaves] = useState<LeaveRecord[]>([]);
   const [leavesLoading, setLeavesLoading] = useState(false);
-  const [leaveForm, setLeaveForm] = useState({ leave_type: 'user_leave', user_id: '', clinic_name: 'ARVI Ortho & Child Care', start_date: '', end_date: '', full_day: true, reason: '' });
+  const [leaveForm, setLeaveForm] = useState({
+    specialist: '', start_date: '', end_date: '',
+    full_day: true, half_day_period: 'first_half',
+    time_from: '', time_to: '', reason: '',
+  });
   const [leaveConflicts, setLeaveConflicts] = useState<any[]>([]);
   const [showLeaveWarning, setShowLeaveWarning] = useState(false);
   const [leaveWaSaved, setLeaveWaSaved] = useState<LeaveRecord | null>(null);
@@ -652,6 +649,25 @@ export default function Admin() {
     toast.success(newVal ? '📌 Pinned to top' : 'Unpinned');
   };
 
+  // ── Specialist options & permission map ────────────────────────────────────
+  const SPECIALIST_OPTIONS = [
+    { value: 'doctor_aravind',  label: 'Dr. Aravindasamy M',    roles: ['master_admin', 'clinic_assistant', 'doctor_aravind'] },
+    { value: 'doctor_vishali',  label: 'Dr. Vishali G',          roles: ['master_admin', 'clinic_assistant', 'doctor_vishali'] },
+    { value: 'physiotherapist', label: 'Physiotherapist Expert', roles: ['master_admin', 'clinic_assistant', 'physiotherapist'] },
+    { value: 'clinic_holiday',  label: 'Arvi Clinic Holiday (All Experts)', roles: ['master_admin', 'clinic_assistant'] },
+  ];
+
+  // Doctor key map: specialist → appointment doctor field values
+  const SPECIALIST_DOCTOR_MAP: Record<string, string[]> = {
+    'doctor_aravind':  ['dr-aravindasamy'],
+    'doctor_vishali':  ['dr-vishali'],
+    'physiotherapist': ['physiotherapist'],
+    'clinic_holiday':  ['dr-aravindasamy', 'dr-vishali', 'physiotherapist'],
+  };
+
+  const currentUserRole = user?.role || '';
+  const allowedSpecialists = SPECIALIST_OPTIONS.filter(s => s.roles.includes(currentUserRole));
+
   // ── Leave functions ────────────────────────────────────────────────────────
   const loadLeaves = async () => {
     setLeavesLoading(true);
@@ -660,30 +676,39 @@ export default function Admin() {
   };
 
   const checkLeaveConflicts = async (): Promise<any[]> => {
-    if (!leaveForm.start_date || !leaveForm.end_date) return [];
+    if (!leaveForm.start_date || !leaveForm.end_date || !leaveForm.specialist) return [];
     const { data } = await supabase.from('appointments')
       .select('*').eq('status', 'approved')
       .gte('appointment_date', leaveForm.start_date)
       .lte('appointment_date', leaveForm.end_date);
     if (!data?.length) return [];
-    if (leaveForm.leave_type === 'user_leave' && leaveForm.user_id) {
-      const user = adminUsers.find(u => u.id === leaveForm.user_id);
-      const doctorKey = user?.role?.replace('doctor_', 'dr-') || '';
-      return data.filter(a => a.doctor === doctorKey);
-    }
-    return data;
+    const doctorKeys = SPECIALIST_DOCTOR_MAP[leaveForm.specialist] || [];
+    return data.filter((a: any) => doctorKeys.includes(a.doctor));
+  };
+
+  const resetLeaveForm = () => {
+    setLeaveForm({ specialist: '', start_date: '', end_date: '', full_day: true, half_day_period: 'first_half', time_from: '', time_to: '', reason: '' });
+    setEditLeaveId(null);
   };
 
   const saveLeave = async (force = false) => {
+    if (!leaveForm.specialist) { toast.error('Please select a specialist'); return; }
     if (!leaveForm.start_date || !leaveForm.end_date) { toast.error('Start and end dates required'); return; }
-    if (leaveForm.leave_type === 'user_leave' && !leaveForm.user_id) { toast.error('Please select a user'); return; }
     if (!force) {
       const conflicts = await checkLeaveConflicts();
       if (conflicts.length > 0) { setLeaveConflicts(conflicts); setShowLeaveWarning(true); return; }
     }
-    const payload: any = { leave_type: leaveForm.leave_type, start_date: leaveForm.start_date, end_date: leaveForm.end_date, full_day: leaveForm.full_day, reason: leaveForm.reason, status: 'active' };
-    if (leaveForm.leave_type === 'user_leave') payload.user_id = leaveForm.user_id;
-    else payload.clinic_name = leaveForm.clinic_name;
+    const payload: any = {
+      specialist: leaveForm.specialist,
+      start_date: leaveForm.start_date,
+      end_date: leaveForm.end_date,
+      full_day: leaveForm.full_day,
+      half_day_period: !leaveForm.full_day ? leaveForm.half_day_period : null,
+      time_from: !leaveForm.full_day && leaveForm.time_from ? leaveForm.time_from : null,
+      time_to:   !leaveForm.full_day && leaveForm.time_to   ? leaveForm.time_to   : null,
+      reason: leaveForm.reason || null,
+      status: 'active',
+    };
     const { data, error } = editLeaveId
       ? await supabase.from('leave_management').update(payload).eq('id', editLeaveId).select().single()
       : await supabase.from('leave_management').insert([payload]).select().single();
@@ -691,14 +716,21 @@ export default function Admin() {
     setShowLeaveWarning(false);
     if (leaveConflicts.length > 0 && data) setLeaveWaSaved(data);
     setLeaveConflicts([]);
-    setLeaveForm({ leave_type: 'user_leave', user_id: '', clinic_name: 'ARVI Ortho & Child Care', start_date: '', end_date: '', full_day: true, reason: '' });
-    setEditLeaveId(null);
+    resetLeaveForm();
     toast.success(editLeaveId ? 'Leave updated' : 'Leave saved');
     await loadLeaves();
   };
 
+  const cancelLeave = async (id: string) => {
+    if (!window.confirm('Cancel this leave record?')) return;
+    const { error } = await supabase.from('leave_management').update({ status: 'cancelled' }).eq('id', id);
+    if (error) { toast.error('Failed to cancel leave'); return; }
+    setLeaves(prev => prev.map(l => l.id === id ? { ...l, status: 'cancelled' } : l));
+    toast.success('Leave cancelled');
+  };
+
   const deleteLeave = async (id: string) => {
-    if (!window.confirm('Delete this leave record?')) return;
+    if (!window.confirm('Delete this leave record permanently?')) return;
     await supabase.from('leave_management').delete().eq('id', id);
     setLeaves(prev => prev.filter(l => l.id !== id));
     toast.success('Leave deleted');
@@ -712,15 +744,31 @@ export default function Admin() {
 
   const saveFlashNews = async (active: boolean) => {
     setFlashLoading(true);
-    const payload = { message: flashMsg, is_active: active, speed: flashSpeed, theme: flashTheme, started_at: active ? new Date().toISOString() : undefined, stopped_at: !active ? new Date().toISOString() : undefined, updated_at: new Date().toISOString() };
-    if (flashNews?.id) {
-      await supabase.from('flash_news').update(payload).eq('id', flashNews.id);
-    } else {
-      const { data } = await supabase.from('flash_news').insert([payload]).select().single();
-      if (data) setFlashNews(data);
+    try {
+      const now = new Date().toISOString();
+      const payload: Record<string, any> = {
+        message: flashMsg,
+        is_active: active,
+        speed: flashSpeed,
+        theme: flashTheme,
+        updated_at: now,
+      };
+      if (active) payload.started_at = now;
+      else payload.stopped_at = now;
+
+      if (flashNews?.id) {
+        const { error } = await supabase.from('flash_news').update(payload).eq('id', flashNews.id);
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase.from('flash_news').insert([payload]).select().single();
+        if (error) throw error;
+        if (data) setFlashNews(data);
+      }
+      await loadFlashNews();
+      toast.success(active ? '📢 Flash news started!' : 'Flash news stopped');
+    } catch (err: any) {
+      toast.error('Failed to save flash news: ' + (err?.message || 'Unknown error'));
     }
-    await loadFlashNews();
-    toast.success(active ? '📢 Flash news started!' : 'Flash news stopped');
     setFlashLoading(false);
   };
 
@@ -917,7 +965,7 @@ export default function Admin() {
     { id: 'users' as Tab, label: 'User Management', icon: Users, show: isMasterAdmin },
     { id: 'whatsapp' as Tab, label: 'WhatsApp', icon: MessageCircle, show: isMasterAdmin },
     { id: 'stories' as Tab, label: 'Patient Stories', icon: Heart, show: isMasterAdmin },
-    { id: 'leave' as Tab, label: 'Leave Management', icon: CalendarOff, show: isMasterAdmin },
+    { id: 'leave' as Tab, label: 'Leave Management', icon: CalendarOff, show: true },  // all roles can access (filtered inside)
     { id: 'flashnews' as Tab, label: 'Flash News', icon: Megaphone, show: isMasterAdmin },
     { id: 'settings' as Tab, label: 'My Settings', icon: Lock, show: true },
   ].filter(n => n.show);
@@ -1484,7 +1532,7 @@ export default function Admin() {
                 <div>
                   <h3 className="font-bold text-[#0A3D62] mb-3">Leave Calendar</h3>
                   <LeaveCalendar
-                    leaves={leaves.map(l => ({ ...l, userName: adminUsers.find(u => u.id === l.user_id)?.full_name }))}
+                    leaves={leaves.map(l => ({ ...l, userName: SPECIALIST_OPTIONS.find(s => s.value === l.specialist)?.label }))}
                     onDateClick={date => {
                       if (!leaveForm.start_date || (leaveForm.start_date && leaveForm.end_date)) {
                         setLeaveForm(p => ({ ...p, start_date: date, end_date: date }));
@@ -1502,79 +1550,105 @@ export default function Admin() {
 
                 {/* Form */}
                 <div className="bg-white rounded-2xl shadow-card p-4 sm:p-5">
-                  <h2 className="text-lg font-bold text-[#0A3D62] mb-4">{editLeaveId ? 'Edit Leave' : 'Add Leave / Holiday'}</h2>
+                  <h2 className="text-lg font-bold text-[#0A3D62] mb-4">{editLeaveId ? 'Edit Leave' : 'Apply Leave / Holiday'}</h2>
                   <div className="space-y-4">
+
+                    {/* 1. Specialist selector */}
                     <div>
-                      <label className="text-xs font-semibold text-gray-600 mb-1 block">Leave Type *</label>
-                      <div className="flex gap-3">
-                        {[['user_leave','User Leave'],['clinic_holiday','Clinic Holiday']].map(([val,lbl]) => (
-                          <label key={val} className={`flex-1 flex items-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all ${leaveForm.leave_type===val?'border-[#0F9FA8] bg-[#0F9FA8]/5':'border-gray-200'}`}>
-                            <input type="radio" name="lt" value={val} checked={leaveForm.leave_type===val} onChange={()=>setLeaveForm(p=>({...p,leave_type:val}))} className="sr-only" />
-                            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${leaveForm.leave_type===val?'border-[#0F9FA8]':'border-gray-300'}`}>
-                              {leaveForm.leave_type===val && <div className="w-2 h-2 rounded-full bg-[#0F9FA8]"/>}
-                            </div>
-                            <span className="text-sm font-medium text-[#0A3D62]">{lbl}</span>
-                          </label>
+                      <label className="text-xs font-semibold text-gray-600 mb-1 block">Select Specialist *</label>
+                      <select
+                        value={leaveForm.specialist}
+                        onChange={e => setLeaveForm(p => ({ ...p, specialist: e.target.value }))}
+                        className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30"
+                      >
+                        <option value="">-- Select Specialist --</option>
+                        {allowedSpecialists.map(s => (
+                          <option key={s.value} value={s.value}>{s.label}</option>
                         ))}
-                      </div>
+                      </select>
                     </div>
 
-                    {leaveForm.leave_type === 'user_leave' ? (
-                      <div>
-                        <label className="text-xs font-semibold text-gray-600 mb-1 block">Select User *</label>
-                        <select value={leaveForm.user_id} onChange={e=>setLeaveForm(p=>({...p,user_id:e.target.value}))}
-                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30">
-                          <option value="">-- Select User --</option>
-                          {adminUsers.map(u => <option key={u.id} value={u.id}>{u.full_name} ({u.role})</option>)}
-                        </select>
-                      </div>
-                    ) : (
-                      <div>
-                        <label className="text-xs font-semibold text-gray-600 mb-1 block">Clinic *</label>
-                        <select value={leaveForm.clinic_name} onChange={e=>setLeaveForm(p=>({...p,clinic_name:e.target.value}))}
-                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30">
-                          <option value="ARVI Ortho & Child Care">ARVI Ortho & Child Care</option>
-                        </select>
-                      </div>
-                    )}
-
+                    {/* 2. Date range */}
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="text-xs font-semibold text-gray-600 mb-1 block">Start Date *</label>
                         <input type="date" value={leaveForm.start_date}
-                          onChange={e=>setLeaveForm(p=>({...p,start_date:e.target.value,end_date:p.end_date||e.target.value}))}
+                          onChange={e => setLeaveForm(p => ({ ...p, start_date: e.target.value, end_date: p.end_date || e.target.value }))}
                           className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
                       </div>
                       <div>
                         <label className="text-xs font-semibold text-gray-600 mb-1 block">End Date *</label>
                         <input type="date" value={leaveForm.end_date} min={leaveForm.start_date}
-                          onChange={e=>setLeaveForm(p=>({...p,end_date:e.target.value}))}
+                          onChange={e => setLeaveForm(p => ({ ...p, end_date: e.target.value }))}
                           className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
                       </div>
                     </div>
 
+                    {/* 3. Duration */}
                     <div>
                       <label className="text-xs font-semibold text-gray-600 mb-1 block">Duration</label>
                       <div className="flex gap-4">
-                        <label className="flex items-center gap-2 cursor-pointer"><input type="radio" checked={leaveForm.full_day} onChange={()=>setLeaveForm(p=>({...p,full_day:true}))} /><span className="text-sm">Full Day</span></label>
-                        <label className="flex items-center gap-2 cursor-pointer"><input type="radio" checked={!leaveForm.full_day} onChange={()=>setLeaveForm(p=>({...p,full_day:false}))} /><span className="text-sm">Half Day</span></label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" checked={leaveForm.full_day} onChange={() => setLeaveForm(p => ({ ...p, full_day: true }))} />
+                          <span className="text-sm">Full Day</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" checked={!leaveForm.full_day} onChange={() => setLeaveForm(p => ({ ...p, full_day: false }))} />
+                          <span className="text-sm">Half Day</span>
+                        </label>
                       </div>
                     </div>
 
+                    {/* 4. Half day options (shown only when Half Day selected) */}
+                    {!leaveForm.full_day && (
+                      <div className="space-y-3 pl-2 border-l-2 border-[#0F9FA8]/30">
+                        <div>
+                          <label className="text-xs font-semibold text-gray-600 mb-1 block">Half Day Period</label>
+                          <div className="flex gap-4">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input type="radio" checked={leaveForm.half_day_period === 'first_half'} onChange={() => setLeaveForm(p => ({ ...p, half_day_period: 'first_half' }))} />
+                              <span className="text-sm">First Half (Morning)</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input type="radio" checked={leaveForm.half_day_period === 'second_half'} onChange={() => setLeaveForm(p => ({ ...p, half_day_period: 'second_half' }))} />
+                              <span className="text-sm">Second Half (Afternoon)</span>
+                            </label>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold text-gray-600 mb-1 block">Unavailability Time Range (optional)</label>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-xs text-gray-500 mb-1 block">From</label>
+                              <input type="time" value={leaveForm.time_from}
+                                onChange={e => setLeaveForm(p => ({ ...p, time_from: e.target.value }))}
+                                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
+                            </div>
+                            <div>
+                              <label className="text-xs text-gray-500 mb-1 block">To</label>
+                              <input type="time" value={leaveForm.time_to}
+                                onChange={e => setLeaveForm(p => ({ ...p, time_to: e.target.value }))}
+                                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 5. Reason */}
                     <div>
                       <label className="text-xs font-semibold text-gray-600 mb-1 block">Reason (optional)</label>
-                      <input value={leaveForm.reason} onChange={e=>setLeaveForm(p=>({...p,reason:e.target.value}))}
+                      <input value={leaveForm.reason} onChange={e => setLeaveForm(p => ({ ...p, reason: e.target.value }))}
                         placeholder="e.g. Medical conference, Personal leave..."
                         className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
                     </div>
 
                     <div className="flex gap-3 pt-1">
-                      <button onClick={()=>saveLeave(false)} className="flex-1 px-5 py-2.5 bg-[#0A3D62] text-white rounded-xl text-sm font-semibold hover:bg-[#0A3D62]/90">
+                      <button onClick={() => saveLeave(false)} className="flex-1 px-5 py-2.5 bg-[#0A3D62] text-white rounded-xl text-sm font-semibold hover:bg-[#0A3D62]/90">
                         {editLeaveId ? 'Update Leave' : 'Save Leave'}
                       </button>
                       {editLeaveId && (
-                        <button onClick={()=>{setEditLeaveId(null);setLeaveForm({leave_type:'user_leave',user_id:'',clinic_name:'ARVI Ortho & Child Care',start_date:'',end_date:'',full_day:true,reason:''}); }}
-                          className="px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-semibold">Cancel</button>
+                        <button onClick={resetLeaveForm} className="px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-semibold">Cancel</button>
                       )}
                     </div>
                   </div>
@@ -1590,34 +1664,64 @@ export default function Admin() {
                   <p className="text-gray-400 text-sm text-center py-8">No leave records yet.</p>
                 ) : (
                   <div className="overflow-x-auto -mx-4 sm:mx-0">
-                    <table className="w-full min-w-[540px] text-sm">
+                    <table className="w-full min-w-[600px] text-sm">
                       <thead><tr className="border-b border-gray-200">
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Type</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">User / Clinic</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Specialist</th>
                         <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Dates</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Duration</th>
                         <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Reason</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
                         <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Actions</th>
                       </tr></thead>
                       <tbody>
                         {leaves.map((l, i) => {
-                          const user = l.user_id ? adminUsers.find(u => u.id === l.user_id) : null;
+                          const specialistLabel = SPECIALIST_OPTIONS.find(s => s.value === l.specialist)?.label || l.specialist;
+                          const isClinicHoliday = l.specialist === 'clinic_holiday';
+                          const canCancel = (() => {
+                            const opt = SPECIALIST_OPTIONS.find(s => s.value === l.specialist);
+                            return opt ? opt.roles.includes(currentUserRole) : false;
+                          })();
                           return (
                             <tr key={l.id} className={i%2===0?'':'bg-gray-50/50'}>
                               <td className="py-2.5 px-3">
-                                <span className={`text-xs px-2 py-1 rounded-full font-semibold ${l.leave_type==='user_leave'?'bg-amber-100 text-amber-700':'bg-red-100 text-red-600'}`}>
-                                  {l.leave_type==='user_leave'?'User Leave':'Clinic Holiday'}
+                                <span className={`text-xs px-2 py-1 rounded-full font-semibold ${isClinicHoliday ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-700'}`}>
+                                  {specialistLabel}
                                 </span>
                               </td>
-                              <td className="py-2.5 px-3 font-medium text-[#0A3D62]">{user?.full_name || l.clinic_name || '-'}</td>
                               <td className="py-2.5 px-3 text-gray-600 whitespace-nowrap">
                                 {l.start_date === l.end_date ? fmtDate(l.start_date) : `${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}`}
                               </td>
+                              <td className="py-2.5 px-3 text-gray-500 text-xs">
+                                {l.full_day ? 'Full Day' : (
+                                  <span>
+                                    Half Day{l.half_day_period ? ` (${l.half_day_period === 'first_half' ? 'Morning' : 'Afternoon'})` : ''}
+                                    {l.time_from && l.time_to ? <><br/>{l.time_from} – {l.time_to}</> : null}
+                                  </span>
+                                )}
+                              </td>
                               <td className="py-2.5 px-3 text-gray-500 max-w-[140px] truncate">{l.reason || '-'}</td>
                               <td className="py-2.5 px-3">
+                                <span className={`text-xs px-2 py-1 rounded-full font-semibold ${l.status === 'active' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
+                                  {l.status === 'active' ? 'Active' : 'Cancelled'}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3">
                                 <div className="flex items-center gap-1">
-                                  <button onClick={()=>{setEditLeaveId(l.id);setLeaveForm({leave_type:l.leave_type,user_id:l.user_id||'',clinic_name:l.clinic_name||'ARVI Ortho & Child Care',start_date:l.start_date,end_date:l.end_date,full_day:l.full_day,reason:l.reason||''});}}
-                                    className="p-1.5 text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10 rounded-lg"><Edit2 size={14}/></button>
-                                  <button onClick={()=>deleteLeave(l.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14}/></button>
+                                  {l.status === 'active' && canCancel && (
+                                    <button onClick={() => cancelLeave(l.id)}
+                                      className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg" title="Cancel Leave">
+                                      <XCircle size={14}/>
+                                    </button>
+                                  )}
+                                  {l.status === 'active' && canCancel && (
+                                    <button onClick={() => { setEditLeaveId(l.id); setLeaveForm({ specialist: l.specialist, start_date: l.start_date, end_date: l.end_date, full_day: l.full_day, half_day_period: l.half_day_period || 'first_half', time_from: l.time_from || '', time_to: l.time_to || '', reason: l.reason || '' }); }}
+                                      className="p-1.5 text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10 rounded-lg" title="Edit">
+                                      <Edit2 size={14}/>
+                                    </button>
+                                  )}
+                                  {isMasterAdmin && (
+                                    <button onClick={() => deleteLeave(l.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Delete permanently"><Trash2 size={14}/></button>
+                                  )}
                                 </div>
                               </td>
                             </tr>
@@ -1648,8 +1752,8 @@ export default function Admin() {
                       ))}
                     </div>
                     <div className="flex gap-3">
-                      <button onClick={()=>setShowLeaveWarning(false)} className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-sm font-semibold">Cancel</button>
-                      <button onClick={()=>saveLeave(true)} className="flex-1 px-4 py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold">Proceed Anyway</button>
+                      <button onClick={() => setShowLeaveWarning(false)} className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-sm font-semibold">Cancel</button>
+                      <button onClick={() => saveLeave(true)} className="flex-1 px-4 py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold">Proceed Anyway</button>
                     </div>
                   </div>
                 </div>
@@ -1682,7 +1786,7 @@ ARVI Ortho & Child Care
                       );
                     })}
                   </div>
-                  <button onClick={()=>{setLeaveWaSaved(null);setLeaveConflicts([]);}} className="mt-3 text-xs text-amber-500 hover:underline">Dismiss</button>
+                  <button onClick={() => { setLeaveWaSaved(null); setLeaveConflicts([]); }} className="mt-3 text-xs text-amber-500 hover:underline">Dismiss</button>
                 </div>
               )}
             </div>
