@@ -17,6 +17,7 @@ import Login from './pages/Login';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import Terms from './pages/Terms';
 import { authService } from './lib/auth';
+import FlashTicker from './components/FlashTicker';
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -28,6 +29,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   return (
     <>
       <Navbar />
+      <FlashTicker />
       <main>{children}</main>
       <Footer />
     </>
@@ -60,13 +62,12 @@ function AppRoutes() {
         <Route path="/terms" element={<Layout><Terms /></Layout>} />
 
         {/* Login/Admin */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/admin" element={<ProtectedAdminRoute />} />
+        <Route path="/login" element={<h1>LOGIN PAGE WORKING</h1>} />
+<Route path="/admin" element={<h1>ADMIN PAGE WORKING</h1>} />
       </Routes>
     </>
   );
 }
-
 export default function App() {
   return (
     <BrowserRouter>

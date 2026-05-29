@@ -1,4 +1,4 @@
-﻿import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Calendar, MessageSquare, LogOut, RefreshCw,
@@ -7,13 +7,14 @@ import {
   Plus, Edit2, UserCheck, UserX, AlertCircle, X, Globe, Heart,
   ChevronDown, ChevronUp, FileText, Play, Pin, PinOff,
   MessageCircle, ToggleLeft, ToggleRight, History, Send, Reply,
-  Tag, FolderOpen
+  Tag, FolderOpen, CalendarOff, Megaphone, Zap, Bell, BellOff,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import LeaveCalendar from '../components/LeaveCalendar';
 import { authService } from '../lib/auth';
 import { toast } from '../lib/toast';
 
-type Tab = 'dashboard' | 'appointments' | 'messages' | 'media' | 'users' | 'settings' | 'whatsapp' | 'stories';
+type Tab = 'dashboard' | 'appointments' | 'messages' | 'media' | 'users' | 'settings' | 'whatsapp' | 'stories' | 'leave' | 'flashnews';
 
 type Appointment = {
   id: string; patient_name: string; patient_phone: string; patient_email?: string;
@@ -527,7 +528,7 @@ export default function Admin() {
   const [mediaCategory, setMediaCategory] = useState('All');
   const [showChangePw, setShowChangePw] = useState(false);
   const [changePwTarget, setChangePwTarget] = useState<{ id: string; name: string } | null>(null);
-  // ── Patient Stories ──────────────────────────────────────────────────────
+  // ── Patient Stories ───────────────────────────────────────────────────────
   type StoryMedia = { id: string; story_id: string; media_url: string; media_type: string; caption?: string; file_name?: string; sort_order: number; is_pinned?: boolean; created_at?: string; thumbnail_url?: string; };
   type PatientStory = { id: string; patient_name: string; treatment: string; description?: string; is_published: boolean; created_at: string; media?: StoryMedia[]; };
   const [stories, setStories] = useState<PatientStory[]>([]);
@@ -539,6 +540,24 @@ export default function Admin() {
   const [addStoryDesc, setAddStoryDesc] = useState('');
   const [addStoryLoading, setAddStoryLoading] = useState(false);
   const [storyUploadingId, setStoryUploadingId] = useState<string | null>(null);
+
+  // ── Leave Management ──────────────────────────────────────────────────────
+  type LeaveRecord = { id: string; leave_type: string; user_id?: string; clinic_name?: string; start_date: string; end_date: string; full_day: boolean; reason?: string; status: string; created_at: string; };
+  const [leaves, setLeaves] = useState<LeaveRecord[]>([]);
+  const [leavesLoading, setLeavesLoading] = useState(false);
+  const [leaveForm, setLeaveForm] = useState({ leave_type: 'user_leave', user_id: '', clinic_name: 'ARVI Ortho & Child Care', start_date: '', end_date: '', full_day: true, reason: '' });
+  const [leaveConflicts, setLeaveConflicts] = useState<any[]>([]);
+  const [showLeaveWarning, setShowLeaveWarning] = useState(false);
+  const [leaveWaSaved, setLeaveWaSaved] = useState<LeaveRecord | null>(null);
+  const [editLeaveId, setEditLeaveId] = useState<string | null>(null);
+
+  // ── Flash News ────────────────────────────────────────────────────────────
+  type FlashNews = { id: string; message: string; is_active: boolean; speed: string; theme: string; };
+  const [flashNews, setFlashNews] = useState<FlashNews | null>(null);
+  const [flashMsg, setFlashMsg] = useState('');
+  const [flashSpeed, setFlashSpeed] = useState('normal');
+  const [flashTheme, setFlashTheme] = useState('default');
+  const [flashLoading, setFlashLoading] = useState(false);
 
   const [showUserModal, setShowUserModal] = useState(false);
   const [editUser, setEditUser] = useState<AdminUserRow | null>(null);
@@ -557,17 +576,11 @@ export default function Admin() {
 
   const loadStories = async () => {
     setStoriesLoading(true);
-    const { data, error } = await supabase.from('patient_stories')
-      .select('*, patient_story_media(*)')
-      .order('created_at', { ascending: false });
+    const { data, error } = await supabase.from('patient_stories').select('*, patient_story_media(*)').order('created_at', { ascending: false });
     if (error) { toast.error('Failed to load stories: ' + error.message); setStoriesLoading(false); return; }
     if (data) setStories(data.map((s: any) => {
-      const raw: StoryMedia[] = (s.patient_story_media || []).sort((a: StoryMedia, b: StoryMedia) =>
-        new Date(b.created_at || '').getTime() - new Date(a.created_at || '').getTime()
-      );
-      const pinned = raw.filter(m => m.is_pinned);
-      const unpinned = raw.filter(m => !m.is_pinned);
-      return { ...s, media: [...pinned, ...unpinned] };
+      const raw: StoryMedia[] = (s.patient_story_media || []).sort((a: StoryMedia, b: StoryMedia) => new Date(b.created_at||'').getTime() - new Date(a.created_at||'').getTime());
+      return { ...s, media: [...raw.filter(m => m.is_pinned), ...raw.filter(m => !m.is_pinned)] };
     }));
     setStoriesLoading(false);
   };
@@ -575,23 +588,19 @@ export default function Admin() {
   const addPatientStory = async () => {
     if (!addStoryName.trim() || !addStoryTreatment.trim()) { toast.error('Name and treatment required'); return; }
     setAddStoryLoading(true);
-    const { data, error } = await supabase.from('patient_stories')
-      .insert([{ patient_name: addStoryName.trim(), treatment: addStoryTreatment.trim(), description: addStoryDesc.trim(), is_published: true }])
-      .select().single();
+    const { data, error } = await supabase.from('patient_stories').insert([{ patient_name: addStoryName.trim(), treatment: addStoryTreatment.trim(), description: addStoryDesc.trim(), is_published: true }]).select().single();
     if (error) { toast.error('Failed: ' + error.message); setAddStoryLoading(false); return; }
     setStories(prev => [{ ...data, media: [] }, ...prev]);
     setAddStoryName(''); setAddStoryTreatment(''); setAddStoryDesc('');
     setShowAddStory(false); setExpandedStory(data.id);
-    toast.success('Story created! Upload files below.');
-    setAddStoryLoading(false);
+    toast.success('Story created! Upload files below.'); setAddStoryLoading(false);
   };
 
   const deleteStory = async (id: string) => {
     if (!window.confirm('Delete this story and all its files?')) return;
     const { error } = await supabase.from('patient_stories').delete().eq('id', id);
     if (error) { toast.error('Failed to delete'); return; }
-    setStories(prev => prev.filter(s => s.id !== id));
-    toast.success('Story deleted');
+    setStories(prev => prev.filter(s => s.id !== id)); toast.success('Story deleted');
   };
 
   const toggleStoryPublish = async (story: PatientStory) => {
@@ -599,37 +608,9 @@ export default function Admin() {
     if (!error) setStories(prev => prev.map(s => s.id === story.id ? { ...s, is_published: !s.is_published } : s));
   };
 
-  const extractStoryVideoThumbnail = (file: File, storyId: string): Promise<string | null> =>
-    new Promise(resolve => {
-      const video = document.createElement('video');
-      video.preload = 'metadata'; video.muted = true; video.playsInline = true;
-      video.src = URL.createObjectURL(file);
-      video.onloadeddata = () => { video.currentTime = 1; };
-      video.onseeked = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-        canvas.getContext('2d')?.drawImage(video, 0, 0);
-        canvas.toBlob(blob => {
-          URL.revokeObjectURL(video.src);
-          if (!blob) { resolve(null); return; }
-          const thumbFile = new File([blob], 'thumb.jpg', { type: 'image/jpeg' });
-          const thumbPath = `stories/${storyId}/thumb_${Date.now()}.jpg`;
-          supabase.storage.from('patient-stories').upload(thumbPath, thumbFile, { contentType: 'image/jpeg' })
-            .then(({ error }) => {
-              if (error) { resolve(null); return; }
-              const { data } = supabase.storage.from('patient-stories').getPublicUrl(thumbPath);
-              resolve(data.publicUrl);
-            });
-        }, 'image/jpeg', 0.8);
-      };
-      video.onerror = () => resolve(null);
-    });
-
   const uploadStoryMedia = async (storyId: string, e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    setStoryUploadingId(storyId);
-    let uploaded = 0;
+    const files = e.target.files; if (!files || !files.length) return;
+    setStoryUploadingId(storyId); let uploaded = 0;
     for (const file of Array.from(files)) {
       if (file.size > 209715200) { toast.error(`${file.name} exceeds 200MB`); continue; }
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -638,20 +619,12 @@ export default function Admin() {
       if (upErr) { toast.error(`Upload failed: ${file.name} — ${upErr.message}`); continue; }
       const { data: urlData } = supabase.storage.from('patient-stories').getPublicUrl(path);
       const mediaType = file.type.startsWith('video') ? 'video' : file.type === 'application/pdf' ? 'pdf' : file.type.includes('word') ? 'doc' : 'image';
-      let thumbnailUrl: string | null = null;
-      if (mediaType === 'video') {
-        toast.info('Extracting thumbnail...');
-        thumbnailUrl = await extractStoryVideoThumbnail(file, storyId);
-      }
-      const { data: ins, error: insErr } = await supabase.from('patient_story_media')
-        .insert([{ story_id: storyId, media_url: urlData.publicUrl, media_type: mediaType, file_name: file.name, thumbnail_url: thumbnailUrl, sort_order: Math.floor(Date.now() / 1000), is_pinned: false }])
-        .select().single();
+      const { data: ins, error: insErr } = await supabase.from('patient_story_media').insert([{ story_id: storyId, media_url: urlData.publicUrl, media_type: mediaType, file_name: file.name, sort_order: Math.floor(Date.now()/1000), is_pinned: false }]).select().single();
       if (insErr) { toast.error(`DB error: ${insErr.message}`); continue; }
-      if (ins) { setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: [ins, ...(s.media || [])] } : s)); uploaded++; }
+      if (ins) { setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: [ins, ...(s.media||[])] } : s)); uploaded++; }
     }
-    if (uploaded > 0) toast.success(`${uploaded} file${uploaded > 1 ? 's' : ''} uploaded!`);
-    setStoryUploadingId(null);
-    e.target.value = '';
+    if (uploaded > 0) toast.success(`${uploaded} file${uploaded>1?'s':''} uploaded!`);
+    setStoryUploadingId(null); e.target.value = '';
   };
 
   const deleteStoryMedia = async (storyId: string, mediaId: string, mediaUrl: string) => {
@@ -663,7 +636,7 @@ export default function Admin() {
     } catch { }
     const { error } = await supabase.from('patient_story_media').delete().eq('id', mediaId);
     if (error) { toast.error('Failed to delete file'); return; }
-    setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: (s.media || []).filter(m => m.id !== mediaId) } : s));
+    setStories(prev => prev.map(s => s.id === storyId ? { ...s, media: (s.media||[]).filter(m => m.id !== mediaId) } : s));
     toast.success('File deleted');
   };
 
@@ -673,10 +646,82 @@ export default function Admin() {
     if (error) { toast.error('Failed to update pin'); return; }
     setStories(prev => prev.map(s => {
       if (s.id !== storyId) return s;
-      const updated = (s.media || []).map(x => x.id === m.id ? { ...x, is_pinned: newVal } : x);
-      return { ...s, media: [...updated.filter(x => x.is_pinned), ...updated.filter(x => !x.is_pinned)] };
+      const updated = (s.media||[]).map(x => x.id === m.id ? { ...x, is_pinned: newVal } : x);
+      return { ...s, media: [...updated.filter(x=>x.is_pinned), ...updated.filter(x=>!x.is_pinned)] };
     }));
     toast.success(newVal ? '📌 Pinned to top' : 'Unpinned');
+  };
+
+  // ── Leave functions ────────────────────────────────────────────────────────
+  const loadLeaves = async () => {
+    setLeavesLoading(true);
+    const { data } = await supabase.from('leave_management').select('*').order('start_date', { ascending: false });
+    setLeaves(data || []); setLeavesLoading(false);
+  };
+
+  const checkLeaveConflicts = async (): Promise<any[]> => {
+    if (!leaveForm.start_date || !leaveForm.end_date) return [];
+    const { data } = await supabase.from('appointments')
+      .select('*').eq('status', 'approved')
+      .gte('appointment_date', leaveForm.start_date)
+      .lte('appointment_date', leaveForm.end_date);
+    if (!data?.length) return [];
+    if (leaveForm.leave_type === 'user_leave' && leaveForm.user_id) {
+      const user = adminUsers.find(u => u.id === leaveForm.user_id);
+      const doctorKey = user?.role?.replace('doctor_', 'dr-') || '';
+      return data.filter(a => a.doctor === doctorKey);
+    }
+    return data;
+  };
+
+  const saveLeave = async (force = false) => {
+    if (!leaveForm.start_date || !leaveForm.end_date) { toast.error('Start and end dates required'); return; }
+    if (leaveForm.leave_type === 'user_leave' && !leaveForm.user_id) { toast.error('Please select a user'); return; }
+    if (!force) {
+      const conflicts = await checkLeaveConflicts();
+      if (conflicts.length > 0) { setLeaveConflicts(conflicts); setShowLeaveWarning(true); return; }
+    }
+    const payload: any = { leave_type: leaveForm.leave_type, start_date: leaveForm.start_date, end_date: leaveForm.end_date, full_day: leaveForm.full_day, reason: leaveForm.reason, status: 'active' };
+    if (leaveForm.leave_type === 'user_leave') payload.user_id = leaveForm.user_id;
+    else payload.clinic_name = leaveForm.clinic_name;
+    const { data, error } = editLeaveId
+      ? await supabase.from('leave_management').update(payload).eq('id', editLeaveId).select().single()
+      : await supabase.from('leave_management').insert([payload]).select().single();
+    if (error) { toast.error('Failed to save leave: ' + error.message); return; }
+    setShowLeaveWarning(false);
+    if (leaveConflicts.length > 0 && data) setLeaveWaSaved(data);
+    setLeaveConflicts([]);
+    setLeaveForm({ leave_type: 'user_leave', user_id: '', clinic_name: 'ARVI Ortho & Child Care', start_date: '', end_date: '', full_day: true, reason: '' });
+    setEditLeaveId(null);
+    toast.success(editLeaveId ? 'Leave updated' : 'Leave saved');
+    await loadLeaves();
+  };
+
+  const deleteLeave = async (id: string) => {
+    if (!window.confirm('Delete this leave record?')) return;
+    await supabase.from('leave_management').delete().eq('id', id);
+    setLeaves(prev => prev.filter(l => l.id !== id));
+    toast.success('Leave deleted');
+  };
+
+  // ── Flash News functions ───────────────────────────────────────────────────
+  const loadFlashNews = async () => {
+    const { data } = await supabase.from('flash_news').select('*').order('created_at', { ascending: false }).limit(1).single();
+    if (data) { setFlashNews(data); if (data.message) setFlashMsg(data.message); setFlashSpeed(data.speed||'normal'); setFlashTheme(data.theme||'default'); }
+  };
+
+  const saveFlashNews = async (active: boolean) => {
+    setFlashLoading(true);
+    const payload = { message: flashMsg, is_active: active, speed: flashSpeed, theme: flashTheme, started_at: active ? new Date().toISOString() : undefined, stopped_at: !active ? new Date().toISOString() : undefined, updated_at: new Date().toISOString() };
+    if (flashNews?.id) {
+      await supabase.from('flash_news').update(payload).eq('id', flashNews.id);
+    } else {
+      const { data } = await supabase.from('flash_news').insert([payload]).select().single();
+      if (data) setFlashNews(data);
+    }
+    await loadFlashNews();
+    toast.success(active ? '📢 Flash news started!' : 'Flash news stopped');
+    setFlashLoading(false);
   };
 
   const autoDeleteOldAppointments = useCallback(async () => {
@@ -685,7 +730,6 @@ export default function Admin() {
       await supabase.from('appointments').delete().lt('appointment_date', cutoff.toISOString().split('T')[0]);
     } catch { }
   }, []);
-
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
@@ -718,12 +762,8 @@ export default function Admin() {
     if (!isMasterAdmin) return;
     setMediaLoading(true);
     try {
-      const { data } = await supabase.from('gallery_items').select('*')
-        .order('created_at', { ascending: false });
-      const sorted = data ? [
-        ...data.filter((m: MediaItem) => m.is_pinned),
-        ...data.filter((m: MediaItem) => !m.is_pinned),
-      ] : [];
+      const { data } = await supabase.from('gallery_items').select('*').order('created_at', { ascending: false });
+      const sorted = data ? [...data.filter((m:MediaItem)=>m.is_pinned), ...data.filter((m:MediaItem)=>!m.is_pinned)] : [];
       setMediaItems(sorted);
     } catch { toast.error('Failed to load media'); }
     setMediaLoading(false);
@@ -732,6 +772,8 @@ export default function Admin() {
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { if (tab === 'media') loadMedia(); }, [tab, loadMedia]);
   useEffect(() => { if (tab === 'stories') loadStories(); }, [tab]);
+  useEffect(() => { if (tab === 'leave') { loadLeaves(); } }, [tab]);
+  useEffect(() => { if (tab === 'flashnews') loadFlashNews(); }, [tab]);
 
   const updateStatus = async (id: string, newStatus: string) => {
     const { error } = await supabase.from('appointments')
@@ -771,42 +813,10 @@ export default function Admin() {
     setMessages(prev => prev.filter(m => m.id !== id));
     toast.success('Message deleted');
   };
-
   const markRead = async (id: string) => {
     await supabase.from('contact_messages').update({ is_read: true }).eq('id', id);
     setMessages(prev => prev.map(m => m.id === id ? { ...m, is_read: true } : m));
   };
-
-  const extractVideoThumbnail = (file: File): Promise<string | null> =>
-    new Promise(resolve => {
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.muted = true;
-      video.playsInline = true;
-      video.src = URL.createObjectURL(file);
-      video.onloadeddata = () => {
-        video.currentTime = 1;
-      };
-      video.onseeked = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext('2d')?.drawImage(video, 0, 0);
-        canvas.toBlob(blob => {
-          URL.revokeObjectURL(video.src);
-          if (!blob) { resolve(null); return; }
-          const thumbFile = new File([blob], 'thumb.jpg', { type: 'image/jpeg' });
-          const thumbName = `thumb_${Date.now()}.jpg`;
-          supabase.storage.from('clinic-images').upload(thumbName, thumbFile, { contentType: 'image/jpeg' })
-            .then(({ error }) => {
-              if (error) { resolve(null); return; }
-              const { data } = supabase.storage.from('clinic-images').getPublicUrl(thumbName);
-              resolve(data.publicUrl);
-            });
-        }, 'image/jpeg', 0.8);
-      };
-      video.onerror = () => resolve(null);
-    });
 
   const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -814,7 +824,7 @@ export default function Admin() {
     setMediaUploading(true);
     let uploaded = 0;
     for (const file of Array.from(files)) {
-      if (file.size > 209715200) { toast.error(`${file.name} exceeds 200MB limit`); continue; }
+      if (file.size > 52428800) { toast.error(`${file.name} too large (max 50MB)`); continue; }
       const isVideo = file.type.startsWith('video/');
       const isImage = file.type.startsWith('image/');
       if (!isVideo && !isImage) { toast.error(`Unsupported: ${file.name}`); continue; }
@@ -825,22 +835,15 @@ export default function Admin() {
         const { error: upErr } = await supabase.storage.from(bucket).upload(fileName, file, { contentType: file.type });
         if (upErr) { toast.error(`Upload failed: ${file.name} — ${upErr.message}`); continue; }
         const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(fileName);
-        let thumbnailUrl: string | null = null;
-        if (isVideo) {
-          toast.info('Extracting video thumbnail...');
-          thumbnailUrl = await extractVideoThumbnail(file);
-        }
         const { data: inserted } = await supabase.from('gallery_items').insert([{
           title: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
           category: isVideo ? 'Videos' : 'Clinic',
           media_url: urlData.publicUrl,
           media_type: isVideo ? 'video' : 'image',
-          thumbnail_url: thumbnailUrl,
           is_published: true,
-          is_pinned: false,
         }]).select().single();
         if (inserted) { setMediaItems(prev => [inserted, ...prev]); uploaded++; }
-      } catch (err) { toast.error(`Error: ${file.name}`); }
+      } catch { toast.error(`Error: ${file.name}`); }
     }
     if (uploaded > 0) toast.success(`${uploaded} file(s) uploaded`);
     setMediaUploading(false);
@@ -860,11 +863,10 @@ export default function Admin() {
     if (error) { toast.error('Failed to update pin'); return; }
     setMediaItems(prev => {
       const updated = prev.map(m => m.id === item.id ? { ...m, is_pinned: newVal } : m);
-      return [...updated.filter(m => m.is_pinned), ...updated.filter(m => !m.is_pinned)];
+      return [...updated.filter(m=>m.is_pinned), ...updated.filter(m=>!m.is_pinned)];
     });
     toast.success(newVal ? '📌 Pinned to top' : 'Unpinned');
   };
-
   const togglePublish = async (item: MediaItem) => {
     const { error } = await supabase.from('gallery_items').update({ is_published: !item.is_published }).eq('id', item.id);
     if (!error) {
@@ -915,6 +917,8 @@ export default function Admin() {
     { id: 'users' as Tab, label: 'User Management', icon: Users, show: isMasterAdmin },
     { id: 'whatsapp' as Tab, label: 'WhatsApp', icon: MessageCircle, show: isMasterAdmin },
     { id: 'stories' as Tab, label: 'Patient Stories', icon: Heart, show: isMasterAdmin },
+    { id: 'leave' as Tab, label: 'Leave Management', icon: CalendarOff, show: isMasterAdmin },
+    { id: 'flashnews' as Tab, label: 'Flash News', icon: Megaphone, show: isMasterAdmin },
     { id: 'settings' as Tab, label: 'My Settings', icon: Lock, show: true },
   ].filter(n => n.show);
 
@@ -1161,7 +1165,7 @@ export default function Admin() {
                     )}
 
                     {/* Reply button */}
-                    <div className="mt-3 flex items-center gap-2">
+                    <div className="mt-3 flex items-center gap-2 flex-wrap">
                       <button onClick={() => setReplyMsg(msg)} className="flex items-center gap-2 px-4 py-2 bg-[#0F9FA8]/10 text-[#0F9FA8] rounded-xl text-sm font-semibold hover:bg-[#0F9FA8]/20">
                         <Reply size={15} />{msg.admin_reply ? 'Edit Reply' : 'Reply'}
                       </button>
@@ -1263,8 +1267,7 @@ export default function Admin() {
                           </button>
                         </div>
                         <div className="flex gap-2">
-                          <button onClick={() => togglePin(item)}
-                title={item.is_pinned ? 'Unpin' : 'Pin to top'}
+                          <button onClick={() => togglePin(item)} title={item.is_pinned ? 'Unpin' : 'Pin to top'}
                 className={`p-1.5 rounded-lg transition-colors ${item.is_pinned ? 'text-amber-500 bg-amber-50' : 'text-gray-400 hover:text-amber-500 hover:bg-amber-50'}`}>
                 {item.is_pinned ? <Pin size={14} /> : <PinOff size={14} />}
               </button>
@@ -1272,12 +1275,7 @@ export default function Admin() {
                             className={`flex-1 text-xs py-1.5 rounded-lg font-medium transition-colors ${item.is_published ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'bg-[#0F9FA8]/10 text-[#0F9FA8] hover:bg-[#0F9FA8]/20'}`}>
                             {item.is_published ? 'Hide' : 'Publish'}
                           </button>
-                          {item.is_pinned && (
-                <div className="absolute top-2 left-2 z-10 bg-amber-400 text-white text-xs px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
-                  <Pin size={10} /> Pinned
-                </div>
-              )}
-            <button onClick={() => deleteMedia(item)} className="px-3 py-1.5 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14} /></button>
+                          <button onClick={() => deleteMedia(item)} className="px-3 py-1.5 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14} /></button>
                         </div>
                       </div>
                     </div>
@@ -1406,137 +1404,69 @@ export default function Admin() {
           {/* PATIENT STORIES */}
           {tab === 'stories' && (
             <div className="space-y-6">
-              <div className="bg-white rounded-2xl shadow-card p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h2 className="text-xl font-bold text-[#0A3D62]">Patient Stories</h2>
-                    <p className="text-gray-500 text-sm mt-1">{stories.length} stories</p>
-                  </div>
-                  <button onClick={() => setShowAddStory(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold hover:bg-[#0F9FA8]/90">
-                    <Plus size={16} />Add Patient Story
-                  </button>
+              <div className="bg-white rounded-2xl shadow-card p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                  <div><h2 className="text-xl font-bold text-[#0A3D62]">Patient Stories</h2><p className="text-gray-500 text-sm">{stories.length} stories</p></div>
+                  <button onClick={() => setShowAddStory(true)} className="flex items-center gap-2 px-4 py-2 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold"><Plus size={16} />Add Patient Story</button>
                 </div>
-
                 {showAddStory && (
-                  <div className="mb-6 p-5 rounded-2xl border-2 border-[#0F9FA8]/30 bg-[#0F9FA8]/5">
+                  <div className="mb-6 p-4 rounded-2xl border-2 border-[#0F9FA8]/30 bg-[#0F9FA8]/5">
                     <h3 className="font-bold text-[#0A3D62] mb-4">New Patient Story</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                      <div>
-                        <label className="text-xs font-semibold text-gray-600 mb-1 block">Patient Name *</label>
-                        <input value={addStoryName} onChange={e => setAddStoryName(e.target.value)} placeholder="e.g. Rajesh Kumar"
-                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
-                      </div>
-                      <div>
-                        <label className="text-xs font-semibold text-gray-600 mb-1 block">Treatment *</label>
-                        <input value={addStoryTreatment} onChange={e => setAddStoryTreatment(e.target.value)} placeholder="e.g. Knee Replacement"
-                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
-                      </div>
+                      <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Patient Name *</label><input value={addStoryName} onChange={e=>setAddStoryName(e.target.value)} placeholder="e.g. Rajesh Kumar" className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" /></div>
+                      <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Treatment *</label><input value={addStoryTreatment} onChange={e=>setAddStoryTreatment(e.target.value)} placeholder="e.g. Knee Replacement" className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" /></div>
                     </div>
-                    <div className="mb-4">
-                      <label className="text-xs font-semibold text-gray-600 mb-1 block">Description (optional)</label>
-                      <textarea value={addStoryDesc} onChange={e => setAddStoryDesc(e.target.value)} placeholder="Patient journey..." rows={3}
-                        className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30 resize-none" />
-                    </div>
-                    <div className="flex gap-3">
-                      <button onClick={addPatientStory} disabled={addStoryLoading}
-                        className="px-5 py-2 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold disabled:opacity-50">
-                        {addStoryLoading ? 'Creating...' : 'Create Story'}
-                      </button>
-                      <button onClick={() => { setShowAddStory(false); setAddStoryName(''); setAddStoryTreatment(''); setAddStoryDesc(''); }}
-                        className="px-5 py-2 bg-gray-100 text-gray-600 rounded-xl text-sm font-semibold">Cancel</button>
-                    </div>
+                    <div className="mb-4"><label className="text-xs font-semibold text-gray-600 mb-1 block">Description (optional)</label><textarea value={addStoryDesc} onChange={e=>setAddStoryDesc(e.target.value)} placeholder="Patient journey..." rows={3} className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30 resize-none" /></div>
+                    <div className="flex gap-3"><button onClick={addPatientStory} disabled={addStoryLoading} className="px-5 py-2 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold disabled:opacity-50">{addStoryLoading?'Creating...':'Create Story'}</button><button onClick={()=>{setShowAddStory(false);setAddStoryName('');setAddStoryTreatment('');setAddStoryDesc('');}} className="px-5 py-2 bg-gray-100 text-gray-600 rounded-xl text-sm font-semibold">Cancel</button></div>
                   </div>
                 )}
-
                 {storiesLoading && <div className="flex justify-center py-8"><div className="w-8 h-8 border-2 border-[#0F9FA8]/30 border-t-[#0F9FA8] rounded-full animate-spin" /></div>}
-                {!storiesLoading && stories.length === 0 && (
-                  <div className="text-center py-12 text-gray-400">
-                    <Heart size={40} className="mx-auto mb-3 opacity-20" />
-                    <p>No patient stories yet.</p>
-                  </div>
-                )}
-
+                {!storiesLoading && stories.length === 0 && <div className="text-center py-12 text-gray-400"><Heart size={40} className="mx-auto mb-3 opacity-20" /><p>No patient stories yet.</p></div>}
                 <div className="space-y-4">
                   {stories.map(story => (
                     <div key={story.id} className="rounded-2xl border border-gray-200 overflow-hidden">
-                      <div className="flex items-center justify-between p-4 bg-gray-50 cursor-pointer hover:bg-gray-100"
-                        onClick={() => setExpandedStory(expandedStory === story.id ? null : story.id)}>
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#0F9FA8] to-[#0A3D62] flex items-center justify-center text-white font-bold flex-shrink-0">
-                            {story.patient_name.charAt(0).toUpperCase()}
-                          </div>
-                          <div>
-                            <p className="font-bold text-[#0A3D62]">{story.patient_name}</p>
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-[#0F9FA8]/10 text-[#0F9FA8] font-semibold">{story.treatment}</span>
-                          </div>
+                      <div className="flex items-center justify-between p-3 sm:p-4 bg-gray-50 cursor-pointer" onClick={()=>setExpandedStory(expandedStory===story.id?null:story.id)}>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#0F9FA8] to-[#0A3D62] flex items-center justify-center text-white font-bold flex-shrink-0">{story.patient_name.charAt(0).toUpperCase()}</div>
+                          <div className="min-w-0"><p className="font-bold text-[#0A3D62] truncate">{story.patient_name}</p><span className="text-xs px-2 py-0.5 rounded-full bg-[#0F9FA8]/10 text-[#0F9FA8] font-semibold">{story.treatment}</span></div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xs px-2 py-1 rounded-full font-semibold ${story.is_published ? 'bg-green-100 text-green-600' : 'bg-gray-200 text-gray-500'}`}>
-                            {story.is_published ? 'Published' : 'Hidden'}
-                          </span>
-                          <span className="text-xs text-gray-400">{story.media?.length || 0} files</span>
-                          <button onClick={e => { e.stopPropagation(); toggleStoryPublish(story); }}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10">
-                            {story.is_published ? <Eye size={15} /> : <EyeOff size={15} />}
-                          </button>
-                          <button onClick={e => { e.stopPropagation(); deleteStory(story.id); }}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50">
-                            <Trash2 size={15} />
-                          </button>
-                          {expandedStory === story.id ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+                        <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                          <span className={`text-xs px-2 py-1 rounded-full font-semibold hidden sm:inline ${story.is_published?'bg-green-100 text-green-600':'bg-gray-200 text-gray-500'}`}>{story.is_published?'Published':'Hidden'}</span>
+                          <button onClick={e=>{e.stopPropagation();toggleStoryPublish(story);}} className="p-1.5 rounded-lg text-gray-400 hover:text-[#0F9FA8]">{story.is_published?<Eye size={15}/>:<EyeOff size={15}/>}</button>
+                          <button onClick={e=>{e.stopPropagation();deleteStory(story.id);}} className="p-1.5 rounded-lg text-gray-400 hover:text-red-500"><Trash2 size={15}/></button>
+                          {expandedStory===story.id?<ChevronUp size={16} className="text-gray-400"/>:<ChevronDown size={16} className="text-gray-400"/>}
                         </div>
                       </div>
-
                       {expandedStory === story.id && (
-                        <div className="p-4 border-t border-gray-200">
+                        <div className="p-3 sm:p-4 border-t border-gray-200">
                           {story.description && <p className="text-gray-600 text-sm mb-4">{story.description}</p>}
                           <div className="mb-4">
                             <label className="flex items-center gap-2 px-4 py-2.5 bg-[#0A3D62]/5 border-2 border-dashed border-[#0A3D62]/20 rounded-xl cursor-pointer hover:bg-[#0A3D62]/10 w-fit">
                               <Plus size={16} className="text-[#0A3D62]" />
-                              <span className="text-sm font-semibold text-[#0A3D62]">
-                                {storyUploadingId === story.id ? 'Uploading...' : 'Upload Files (Images, Videos, PDFs, Docs)'}
-                              </span>
-                              <input type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx" className="hidden"
-                                disabled={storyUploadingId === story.id}
-                                onChange={e => uploadStoryMedia(story.id, e)} />
+                              <span className="text-sm font-semibold text-[#0A3D62]">{storyUploadingId===story.id?'Uploading...':'Upload Files'}</span>
+                              <input type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx" className="hidden" disabled={storyUploadingId===story.id} onChange={e=>uploadStoryMedia(story.id,e)} />
                             </label>
-                            <p className="text-xs text-gray-400 mt-1">JPG, PNG, MP4, PDF, DOCX · up to 200MB each · newest shown first · 📌 pin favorites to top</p>
+                            <p className="text-xs text-gray-400 mt-1">JPG, PNG, MP4, PDF, DOCX · up to 200MB</p>
                           </div>
-
                           {story.media && story.media.length > 0 ? (
                             <div className="space-y-2">
-                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{story.media.length} file{story.media.length !== 1 ? 's' : ''}</p>
-                              {story.media.map((m, idx) => (
-                                <div key={m.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 bg-gray-50 hover:bg-white group">
-                                  <span className="text-xs text-gray-400 w-5 text-center">{m.is_pinned ? '📌' : idx + 1}</span>
-                                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${m.media_type === 'pdf' ? 'bg-red-50' : m.media_type === 'doc' ? 'bg-blue-50' : m.media_type === 'video' ? 'bg-purple-50' : 'bg-teal-50'}`}>
-                                    {m.media_type === 'pdf' ? <FileText size={18} className="text-red-500" /> :
-                                     m.media_type === 'doc' ? <FileText size={18} className="text-blue-500" /> :
-                                     m.media_type === 'video' ? <Play size={18} className="text-purple-500" /> :
-                                     <ImageIcon size={18} className="text-[#0F9FA8]" />}
+                              {story.media.map((m,idx) => (
+                                <div key={m.id} className="flex items-center gap-2 p-2.5 rounded-xl border border-gray-200 bg-gray-50 hover:bg-white group">
+                                  <span className="text-xs text-gray-400 w-5 text-center flex-shrink-0">{m.is_pinned?'📌':idx+1}</span>
+                                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${m.media_type==='pdf'?'bg-red-50':m.media_type==='doc'?'bg-blue-50':m.media_type==='video'?'bg-purple-50':'bg-teal-50'}`}>
+                                    {m.media_type==='pdf'?<FileText size={16} className="text-red-500"/>:m.media_type==='doc'?<FileText size={16} className="text-blue-500"/>:m.media_type==='video'?<Play size={16} className="text-purple-500"/>:<ImageIcon size={16} className="text-[#0F9FA8]"/>}
                                   </div>
                                   <a href={m.media_url} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium text-[#0A3D62] truncate">{m.file_name || 'File'}</p>
-                                    <p className="text-xs text-gray-400 uppercase">{m.media_type} · click to open</p>
+                                    <p className="text-sm font-medium text-[#0A3D62] truncate">{m.file_name||'File'}</p>
+                                    <p className="text-xs text-gray-400 uppercase">{m.media_type}</p>
                                   </a>
-                                  {(m.media_type === 'image') && <img src={m.media_url} alt="preview" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy" />}
-                                  {(m.media_type === 'video' && m.thumbnail_url) && <img src={m.thumbnail_url} alt="thumb" className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy" />}
-                                  <button onClick={() => toggleStoryMediaPin(story.id, m)}
-                                    title={m.is_pinned ? 'Unpin' : 'Pin to top'}
-                                    className={`p-1.5 rounded-lg flex-shrink-0 transition-colors ${m.is_pinned ? 'text-amber-500 bg-amber-50' : 'text-gray-300 hover:text-amber-500 hover:bg-amber-50 opacity-0 group-hover:opacity-100'}`}>
-                                    {m.is_pinned ? <Pin size={14} /> : <PinOff size={14} />}
-                                  </button>
-                                  <button onClick={() => deleteStoryMedia(story.id, m.id, m.media_url)}
-                                    className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 flex-shrink-0">
-                                    <Trash2 size={15} />
-                                  </button>
+                                  {m.media_type==='image'&&<img src={m.media_url} alt="preview" className="w-8 h-8 rounded-lg object-cover border border-gray-200 flex-shrink-0" loading="lazy"/>}
+                                  <button onClick={()=>toggleStoryMediaPin(story.id,m)} className={`p-1.5 rounded-lg flex-shrink-0 ${m.is_pinned?'text-amber-500':'text-gray-300 hover:text-amber-500 opacity-0 group-hover:opacity-100'}`}>{m.is_pinned?<Pin size={13}/>:<PinOff size={13}/>}</button>
+                                  <button onClick={()=>deleteStoryMedia(story.id,m.id,m.media_url)} className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 flex-shrink-0"><Trash2 size={13}/></button>
                                 </div>
                               ))}
                             </div>
-                          ) : (
-                            <p className="text-gray-400 text-sm italic">No files yet. Upload above.</p>
-                          )}
+                          ) : <p className="text-gray-400 text-sm italic">No files yet.</p>}
                         </div>
                       )}
                     </div>
@@ -1546,6 +1476,316 @@ export default function Admin() {
             </div>
           )}
 
+          {/* LEAVE MANAGEMENT */}
+          {tab === 'leave' && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                {/* Calendar */}
+                <div>
+                  <h3 className="font-bold text-[#0A3D62] mb-3">Leave Calendar</h3>
+                  <LeaveCalendar
+                    leaves={leaves.map(l => ({ ...l, userName: adminUsers.find(u => u.id === l.user_id)?.full_name }))}
+                    onDateClick={date => {
+                      if (!leaveForm.start_date || (leaveForm.start_date && leaveForm.end_date)) {
+                        setLeaveForm(p => ({ ...p, start_date: date, end_date: date }));
+                      } else {
+                        const newEnd = date >= leaveForm.start_date ? date : leaveForm.start_date;
+                        const newStart = date < leaveForm.start_date ? date : leaveForm.start_date;
+                        setLeaveForm(p => ({ ...p, start_date: newStart, end_date: newEnd }));
+                      }
+                    }}
+                    selectedStart={leaveForm.start_date}
+                    selectedEnd={leaveForm.end_date}
+                  />
+                  <p className="text-xs text-gray-400 mt-2">Click a date to select. Click two dates to set a range.</p>
+                </div>
+
+                {/* Form */}
+                <div className="bg-white rounded-2xl shadow-card p-4 sm:p-5">
+                  <h2 className="text-lg font-bold text-[#0A3D62] mb-4">{editLeaveId ? 'Edit Leave' : 'Add Leave / Holiday'}</h2>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-xs font-semibold text-gray-600 mb-1 block">Leave Type *</label>
+                      <div className="flex gap-3">
+                        {[['user_leave','User Leave'],['clinic_holiday','Clinic Holiday']].map(([val,lbl]) => (
+                          <label key={val} className={`flex-1 flex items-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all ${leaveForm.leave_type===val?'border-[#0F9FA8] bg-[#0F9FA8]/5':'border-gray-200'}`}>
+                            <input type="radio" name="lt" value={val} checked={leaveForm.leave_type===val} onChange={()=>setLeaveForm(p=>({...p,leave_type:val}))} className="sr-only" />
+                            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${leaveForm.leave_type===val?'border-[#0F9FA8]':'border-gray-300'}`}>
+                              {leaveForm.leave_type===val && <div className="w-2 h-2 rounded-full bg-[#0F9FA8]"/>}
+                            </div>
+                            <span className="text-sm font-medium text-[#0A3D62]">{lbl}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {leaveForm.leave_type === 'user_leave' ? (
+                      <div>
+                        <label className="text-xs font-semibold text-gray-600 mb-1 block">Select User *</label>
+                        <select value={leaveForm.user_id} onChange={e=>setLeaveForm(p=>({...p,user_id:e.target.value}))}
+                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30">
+                          <option value="">-- Select User --</option>
+                          {adminUsers.map(u => <option key={u.id} value={u.id}>{u.full_name} ({u.role})</option>)}
+                        </select>
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="text-xs font-semibold text-gray-600 mb-1 block">Clinic *</label>
+                        <select value={leaveForm.clinic_name} onChange={e=>setLeaveForm(p=>({...p,clinic_name:e.target.value}))}
+                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30">
+                          <option value="ARVI Ortho & Child Care">ARVI Ortho & Child Care</option>
+                        </select>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-semibold text-gray-600 mb-1 block">Start Date *</label>
+                        <input type="date" value={leaveForm.start_date}
+                          onChange={e=>setLeaveForm(p=>({...p,start_date:e.target.value,end_date:p.end_date||e.target.value}))}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-gray-600 mb-1 block">End Date *</label>
+                        <input type="date" value={leaveForm.end_date} min={leaveForm.start_date}
+                          onChange={e=>setLeaveForm(p=>({...p,end_date:e.target.value}))}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-gray-600 mb-1 block">Duration</label>
+                      <div className="flex gap-4">
+                        <label className="flex items-center gap-2 cursor-pointer"><input type="radio" checked={leaveForm.full_day} onChange={()=>setLeaveForm(p=>({...p,full_day:true}))} /><span className="text-sm">Full Day</span></label>
+                        <label className="flex items-center gap-2 cursor-pointer"><input type="radio" checked={!leaveForm.full_day} onChange={()=>setLeaveForm(p=>({...p,full_day:false}))} /><span className="text-sm">Half Day</span></label>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-gray-600 mb-1 block">Reason (optional)</label>
+                      <input value={leaveForm.reason} onChange={e=>setLeaveForm(p=>({...p,reason:e.target.value}))}
+                        placeholder="e.g. Medical conference, Personal leave..."
+                        className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
+                    </div>
+
+                    <div className="flex gap-3 pt-1">
+                      <button onClick={()=>saveLeave(false)} className="flex-1 px-5 py-2.5 bg-[#0A3D62] text-white rounded-xl text-sm font-semibold hover:bg-[#0A3D62]/90">
+                        {editLeaveId ? 'Update Leave' : 'Save Leave'}
+                      </button>
+                      {editLeaveId && (
+                        <button onClick={()=>{setEditLeaveId(null);setLeaveForm({leave_type:'user_leave',user_id:'',clinic_name:'ARVI Ortho & Child Care',start_date:'',end_date:'',full_day:true,reason:''}); }}
+                          className="px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-semibold">Cancel</button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Leave Records Table */}
+              <div className="bg-white rounded-2xl shadow-card p-4 sm:p-6">
+                <h3 className="font-bold text-[#0A3D62] mb-4">Leave Records ({leaves.length})</h3>
+                {leavesLoading ? (
+                  <div className="flex justify-center py-8"><div className="w-8 h-8 border-2 border-[#0F9FA8]/30 border-t-[#0F9FA8] rounded-full animate-spin"/></div>
+                ) : leaves.length === 0 ? (
+                  <p className="text-gray-400 text-sm text-center py-8">No leave records yet.</p>
+                ) : (
+                  <div className="overflow-x-auto -mx-4 sm:mx-0">
+                    <table className="w-full min-w-[540px] text-sm">
+                      <thead><tr className="border-b border-gray-200">
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Type</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">User / Clinic</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Dates</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Reason</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                      </tr></thead>
+                      <tbody>
+                        {leaves.map((l, i) => {
+                          const user = l.user_id ? adminUsers.find(u => u.id === l.user_id) : null;
+                          return (
+                            <tr key={l.id} className={i%2===0?'':'bg-gray-50/50'}>
+                              <td className="py-2.5 px-3">
+                                <span className={`text-xs px-2 py-1 rounded-full font-semibold ${l.leave_type==='user_leave'?'bg-amber-100 text-amber-700':'bg-red-100 text-red-600'}`}>
+                                  {l.leave_type==='user_leave'?'User Leave':'Clinic Holiday'}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 font-medium text-[#0A3D62]">{user?.full_name || l.clinic_name || '-'}</td>
+                              <td className="py-2.5 px-3 text-gray-600 whitespace-nowrap">
+                                {l.start_date === l.end_date ? fmtDate(l.start_date) : `${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}`}
+                              </td>
+                              <td className="py-2.5 px-3 text-gray-500 max-w-[140px] truncate">{l.reason || '-'}</td>
+                              <td className="py-2.5 px-3">
+                                <div className="flex items-center gap-1">
+                                  <button onClick={()=>{setEditLeaveId(l.id);setLeaveForm({leave_type:l.leave_type,user_id:l.user_id||'',clinic_name:l.clinic_name||'ARVI Ortho & Child Care',start_date:l.start_date,end_date:l.end_date,full_day:l.full_day,reason:l.reason||''});}}
+                                    className="p-1.5 text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10 rounded-lg"><Edit2 size={14}/></button>
+                                  <button onClick={()=>deleteLeave(l.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14}/></button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Conflict Warning Modal */}
+              {showLeaveWarning && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0"><AlertCircle size={20} className="text-amber-600"/></div>
+                      <h3 className="font-bold text-[#0A3D62]">⚠️ Appointments Already Booked</h3>
+                    </div>
+                    <p className="text-gray-600 text-sm mb-3">There are already confirmed appointments during the selected leave period. Please contact affected patients before proceeding.</p>
+                    <p className="text-sm font-semibold text-amber-600 mb-4">Affected Appointments: {leaveConflicts.length}</p>
+                    <div className="space-y-2 max-h-40 overflow-y-auto mb-4">
+                      {leaveConflicts.map(a => (
+                        <div key={a.id} className="text-xs bg-amber-50 rounded-lg p-2.5">
+                          <p className="font-semibold">{a.patient_name} — {fmtDate(a.appointment_date)} at {a.appointment_time}</p>
+                          <p className="text-gray-500">{a.patient_phone}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex gap-3">
+                      <button onClick={()=>setShowLeaveWarning(false)} className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-sm font-semibold">Cancel</button>
+                      <button onClick={()=>saveLeave(true)} className="flex-1 px-4 py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold">Proceed Anyway</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* WhatsApp notification panel */}
+              {leaveWaSaved && leaveConflicts.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                  <p className="font-semibold text-amber-700 mb-1">⚠️ Patient Notification Required</p>
+                  <p className="text-sm text-amber-600 mb-3">Please send WhatsApp messages to the {leaveConflicts.length} affected patient{leaveConflicts.length>1?'s':''}.</p>
+                  <div className="space-y-2">
+                    {leaveConflicts.map(a => {
+                      const msg = encodeURIComponent(`Hello ${a.patient_name},
+
+We regret to inform you that your appointment at ARVI Ortho & Child Care on ${fmtDate(a.appointment_date)} at ${a.appointment_time} cannot be accommodated due to clinic unavailability.
+
+Please contact us to reschedule. We apologize for the inconvenience.
+
+Thank you,
+ARVI Ortho & Child Care
++91 96770 80778`);
+                      return (
+                        <div key={a.id} className="flex items-center justify-between bg-white rounded-xl p-3 border border-amber-100">
+                          <div><p className="text-sm font-semibold">{a.patient_name}</p><p className="text-xs text-gray-500">{a.patient_phone} — {fmtDate(a.appointment_date)} at {a.appointment_time}</p></div>
+                          <a href={`https://wa.me/${a.patient_phone.replace(/\D/g,'')}?text=${msg}`} target="_blank" rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs font-semibold flex-shrink-0 ml-2">
+                            <Send size={12}/>WhatsApp
+                          </a>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <button onClick={()=>{setLeaveWaSaved(null);setLeaveConflicts([]);}} className="mt-3 text-xs text-amber-500 hover:underline">Dismiss</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* FLASH NEWS */}
+          {tab === 'flashnews' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-2xl shadow-card p-4 sm:p-6">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-10 h-10 rounded-xl bg-[#0F9FA8]/10 flex items-center justify-center"><Megaphone size={20} className="text-[#0F9FA8]"/></div>
+                  <div><h2 className="text-xl font-bold text-[#0A3D62]">Flash News Manager</h2><p className="text-gray-500 text-sm">Broadcast announcements across the website</p></div>
+                  {flashNews?.is_active && <span className="ml-auto flex items-center gap-1.5 px-3 py-1 bg-green-100 text-green-600 rounded-full text-xs font-semibold"><div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"/>LIVE</span>}
+                </div>
+
+                {/* Current status banner */}
+                {flashNews?.is_active && flashNews.message && (
+                  <div className="mb-5 p-3 bg-[#0A3D62] rounded-xl text-white text-sm overflow-hidden">
+                    <p className="text-xs text-white/60 mb-1">Currently displaying:</p>
+                    <p className="font-medium truncate">📢 {flashNews.message}</p>
+                  </div>
+                )}
+
+                {/* Message input */}
+                <div className="mb-4">
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-xs font-semibold text-gray-600">Flash Message *</label>
+                    <span className="text-xs text-gray-400">{flashMsg.length} chars</span>
+                  </div>
+                  <textarea value={flashMsg} onChange={e=>setFlashMsg(e.target.value)} rows={3}
+                    placeholder="e.g. Appointments unavailable on Sunday due to maintenance. 📢"
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30 resize-none" />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600 mb-1 block">Scroll Speed</label>
+                    <select value={flashSpeed} onChange={e=>setFlashSpeed(e.target.value)}
+                      className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30">
+                      <option value="slow">Slow</option>
+                      <option value="normal">Normal</option>
+                      <option value="fast">Fast</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600 mb-1 block">Theme</label>
+                    <select value={flashTheme} onChange={e=>setFlashTheme(e.target.value)}
+                      className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30">
+                      <option value="default">Default (Dark Blue)</option>
+                      <option value="emergency">Emergency (Red)</option>
+                      <option value="info">Info (Teal)</option>
+                      <option value="success">Success (Green)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Preview */}
+                {flashMsg.trim() && (
+                  <div className="mb-5">
+                    <p className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Preview</p>
+                    <div className={`rounded-xl overflow-hidden flex items-center ${flashTheme==='emergency'?'bg-red-600':flashTheme==='info'?'bg-[#0F9FA8]':flashTheme==='success'?'bg-green-600':'bg-[#0A3D62]'}`}>
+                      <div className="px-3 py-2 flex items-center gap-1.5 border-r border-white/20 flex-shrink-0" style={{background:'rgba(0,0,0,0.15)'}}>
+                        <Megaphone size={12} className="text-white"/><span className="text-white text-xs font-bold">Flash News</span>
+                      </div>
+                      <p className="text-white text-sm px-4 py-2 truncate">📢 {flashMsg}</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-3">
+                  <button onClick={()=>saveFlashNews(true)} disabled={flashLoading||!flashMsg.trim()}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold hover:bg-[#0F9FA8]/90 disabled:opacity-50">
+                    <Zap size={16}/>{flashLoading?'Saving...':flashNews?.is_active?'Update & Broadcast':'Start Broadcasting'}
+                  </button>
+                  {flashNews?.is_active && (
+                    <button onClick={()=>saveFlashNews(false)} disabled={flashLoading}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-red-50 text-red-500 rounded-xl text-sm font-semibold hover:bg-red-100 border border-red-200">
+                      <BellOff size={16}/>Stop Broadcasting
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {flashNews && (
+                <div className="bg-white rounded-2xl shadow-card p-4 sm:p-6">
+                  <h3 className="font-bold text-[#0A3D62] mb-3">Status</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    {[
+                      { label: 'Status', value: flashNews.is_active ? 'LIVE' : 'Stopped', color: flashNews.is_active ? 'text-green-600' : 'text-gray-400' },
+                      { label: 'Speed', value: flashNews.speed || 'normal', color: 'text-[#0A3D62]' },
+                      { label: 'Theme', value: flashNews.theme || 'default', color: 'text-[#0A3D62]' },
+                      { label: 'Last Updated', value: flashNews.updated_at ? new Date(flashNews.updated_at).toLocaleDateString('en-IN') : '-', color: 'text-gray-500' },
+                    ].map(item => (
+                      <div key={item.label} className="bg-gray-50 rounded-xl p-3">
+                        <p className="text-xs text-gray-400 mb-1">{item.label}</p>
+                        <p className={`text-sm font-bold capitalize ${item.color}`}>{item.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {tab === 'settings' && (
             <div className="max-w-xl space-y-6">
               <div className="bg-white rounded-2xl shadow-card p-6">
