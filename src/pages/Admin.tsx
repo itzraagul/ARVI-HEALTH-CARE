@@ -39,75 +39,6 @@ type WaLog = {
   message_sent: string; status: string; error_message?: string; created_at: string;
 };
 
-// ─── Ensure DB tables exist (runs once on admin load) ────────────────────────
-async function ensureTables() {
-  try {
-    // Test if leave_management exists by doing a minimal SELECT
-    const { error: leaveErr } = await supabase
-      .from('leave_management').select('id').limit(1);
-
-    if (leaveErr && leaveErr.message.includes('schema cache')) {
-      // Table missing — create via Supabase SQL execution
-      await supabase.rpc('exec_sql', {
-        sql: `
-          CREATE TABLE IF NOT EXISTS leave_management (
-            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-            specialist text NOT NULL CHECK (specialist IN ('doctor_aravind','doctor_vishali','physiotherapist','clinic_holiday')),
-            start_date date NOT NULL,
-            end_date date NOT NULL,
-            full_day boolean NOT NULL DEFAULT true,
-            half_day_period text CHECK (half_day_period IN ('first_half','second_half')),
-            time_from time, time_to time, reason text,
-            status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','cancelled')),
-            created_by text, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
-          );
-          ALTER TABLE leave_management ENABLE ROW LEVEL SECURITY;
-          DO $$ BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='leave_management' AND policyname='leave_sel') THEN
-              CREATE POLICY "leave_sel" ON leave_management FOR SELECT TO anon USING (true);
-              CREATE POLICY "leave_ins" ON leave_management FOR INSERT TO anon WITH CHECK (true);
-              CREATE POLICY "leave_upd" ON leave_management FOR UPDATE TO anon USING (true) WITH CHECK (true);
-              CREATE POLICY "leave_del" ON leave_management FOR DELETE TO anon USING (true);
-            END IF;
-          END $$;
-        `
-      });
-    }
-
-    // Test if flash_news exists
-    const { error: fnErr } = await supabase
-      .from('flash_news').select('id').limit(1);
-
-    if (fnErr && fnErr.message.includes('schema cache')) {
-      await supabase.rpc('exec_sql', {
-        sql: `
-          CREATE TABLE IF NOT EXISTS flash_news (
-            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-            message text NOT NULL DEFAULT '',
-            is_active boolean NOT NULL DEFAULT false,
-            speed text NOT NULL DEFAULT 'normal' CHECK (speed IN ('slow','normal','fast')),
-            theme text NOT NULL DEFAULT 'default' CHECK (theme IN ('default','emergency','info','success')),
-            created_by text, started_at timestamptz, stopped_at timestamptz,
-            created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
-          );
-          ALTER TABLE flash_news ENABLE ROW LEVEL SECURITY;
-          DO $$ BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='flash_news' AND policyname='fn_sel') THEN
-              CREATE POLICY "fn_sel" ON flash_news FOR SELECT TO anon USING (true);
-              CREATE POLICY "fn_ins" ON flash_news FOR INSERT TO anon WITH CHECK (true);
-              CREATE POLICY "fn_upd" ON flash_news FOR UPDATE TO anon USING (true) WITH CHECK (true);
-              CREATE POLICY "fn_del" ON flash_news FOR DELETE TO anon USING (true);
-            END IF;
-          END $$;
-          INSERT INTO flash_news (message, is_active) VALUES ('', false);
-        `
-      });
-    }
-  } catch {
-    // Non-fatal — SQL editor is the authoritative way to create tables
-  }
-}
-
 function fmtDate(d?: string) {
   if (!d) return '';
   return new Date(d + (d.includes('T') ? '' : 'T12:00:00'))
@@ -137,32 +68,30 @@ const MEDIA_CATEGORIES = ['Clinic', 'Doctors', 'Promotions', 'Google Images', 'V
 function buildWaMessage(apt: Appointment): string {
   const dateStr = fmtDate(apt.appointment_date);
   const doctorName = doctorLabels[apt.doctor] || apt.doctor;
-  // Use Unicode escape sequences — prevents any build-tool or file-encoding
-  // corruption of emoji characters, which causes the ? box issue in WhatsApp.
-  const tick   = '\u2705';          // ✅
-  const cal    = '\uD83D\uDCC5';   // 📅
-  const clock  = '\uD83D\uDD50';   // 🕐
-  const doctor = '\uD83D\uDC68\u200D\u2695\uFE0F'; // 👨‍⚕️
-  const hosp   = '\uD83C\uDFE5';   // 🏥
-  const pray   = '\uD83D\uDE4F';   // 🙏
+  // Unicode escape sequences: survive all build tools and file encodings
+  const E_TICK  = '\u2705';
+  const E_CAL   = '\uD83D\uDCC5';
+  const E_CLOCK = '\uD83D\uDD50';
+  const E_DOC   = '\uD83D\uDC68\u200D\u2695\uFE0F';
+  const E_HOSP  = '\uD83C\uDFE5';
+  const E_PRAY  = '\uD83D\uDE4F';
   return [
     `Hello ${apt.patient_name},`,
     ``,
-    `${tick} Your appointment has been *confirmed* successfully!`,
+    `${E_TICK} Your appointment has been confirmed successfully!`,
     ``,
-    `${cal} *Date:* ${dateStr}`,
-    `${clock} *Time:* ${apt.appointment_time}`,
-    `${doctor} *Doctor:* ${doctorName}`,
-    `${hosp} *Clinic:* ${CLINIC_NAME}`,
+    `${E_CAL} Date: ${dateStr}`,
+    `${E_CLOCK} Time: ${apt.appointment_time}`,
+    `${E_DOC} Doctor: ${doctorName}`,
+    `${E_HOSP} Clinic: ${CLINIC_NAME}`,
     ``,
     `Please arrive 10 minutes before your scheduled time.`,
     ``,
     `For queries, call us at ${CLINIC_PHONE}.`,
     ``,
-    `Thank you for choosing ${CLINIC_NAME}. We look forward to seeing you! ${pray}`,
+    `Thank you for choosing ${CLINIC_NAME}. We look forward to seeing you! ${E_PRAY}`,
   ].join('\n');
 }
-
 function cleanPhone(raw: string): string {
   let p = raw.replace(/\D/g, '');
   if (p.startsWith('0')) p = p.slice(1);
@@ -170,6 +99,7 @@ function cleanPhone(raw: string): string {
   return p;
 }
 
+// ─── WhatsApp message builder ───────────────────────────────────────────────
 async function sendWhatsAppMessage(apt: Appointment): Promise<{ success: boolean; error?: string }> {
   const message = buildWaMessage(apt);
 
@@ -178,23 +108,18 @@ async function sendWhatsAppMessage(apt: Appointment): Promise<{ success: boolean
     return { success: false, error: 'Invalid phone number' };
   }
 
-  // Build wa.me URL — encodeURIComponent handles all Unicode/emoji correctly
   const encoded = encodeURIComponent(message);
   const waUrl = `https://wa.me/${phone}?text=${encoded}`;
 
-  // Use programmatic <a> click instead of window.open:
-  // - Avoids popup blockers (treated as user-initiated navigation)
-  // - Avoids double-open bug
-  // - Opens in new tab reliably
-  const a = document.createElement('a');
-  a.href = waUrl;
-  a.target = '_blank';
-  a.rel = 'noopener noreferrer';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  // Programmatic anchor click: avoids popup blockers & double-open bug
+  const _a = document.createElement('a');
+  _a.href = waUrl;
+  _a.target = '_blank';
+  _a.rel = 'noopener noreferrer';
+  document.body.appendChild(_a);
+  _a.click();
+  setTimeout(() => { try { document.body.removeChild(_a); } catch {} }, 200);
 
-  // Fire-and-forget DB logging
   try {
     await supabase.from('whatsapp_logs').insert([{
       appointment_id: apt.id,
@@ -628,8 +553,7 @@ export default function Admin() {
   const [leavesLoading, setLeavesLoading] = useState(false);
   const [leaveForm, setLeaveForm] = useState({
     specialist: '', start_date: '', end_date: '',
-    full_day: true, half_day_period: 'first_half',
-    time_from: '', time_to: '', reason: '',
+    full_day: true, half_day_period: 'first_half', time_from: '', time_to: '', reason: '',
   });
   const [leaveConflicts, setLeaveConflicts] = useState<any[]>([]);
   const [showLeaveWarning, setShowLeaveWarning] = useState(false);
@@ -737,45 +661,44 @@ export default function Admin() {
     toast.success(newVal ? '📌 Pinned to top' : 'Unpinned');
   };
 
-  // ── Specialist options & permission map ────────────────────────────────────
+  // ── Specialist permission map ─────────────────────────────────────────────
   const SPECIALIST_OPTIONS = [
-    { value: 'doctor_aravind',  label: 'Dr. Aravindasamy M',    roles: ['master_admin', 'clinic_assistant', 'doctor_aravind'] },
-    { value: 'doctor_vishali',  label: 'Dr. Vishali G',          roles: ['master_admin', 'clinic_assistant', 'doctor_vishali'] },
-    { value: 'physiotherapist', label: 'Physiotherapist Expert', roles: ['master_admin', 'clinic_assistant', 'physiotherapist'] },
-    { value: 'clinic_holiday',  label: 'Arvi Clinic Holiday (All Experts)', roles: ['master_admin', 'clinic_assistant'] },
+    { value: 'doctor_aravind',  label: 'Dr. Aravindasamy M',           roles: ['master_admin','clinic_assistant','doctor_aravind'] },
+    { value: 'doctor_vishali',  label: 'Dr. Vishali G',                 roles: ['master_admin','clinic_assistant','doctor_vishali'] },
+    { value: 'physiotherapist', label: 'Physiotherapist Expert',        roles: ['master_admin','clinic_assistant','physiotherapist'] },
+    { value: 'clinic_holiday',  label: 'Arvi Clinic Holiday (All)',     roles: ['master_admin','clinic_assistant'] },
   ];
-
-  // Doctor key map: specialist → appointment doctor field values
-  const SPECIALIST_DOCTOR_MAP: Record<string, string[]> = {
+  const SPECIALIST_DOCTOR_MAP: Record<string,string[]> = {
     'doctor_aravind':  ['dr-aravindasamy'],
     'doctor_vishali':  ['dr-vishali'],
     'physiotherapist': ['physiotherapist'],
-    'clinic_holiday':  ['dr-aravindasamy', 'dr-vishali', 'physiotherapist'],
+    'clinic_holiday':  ['dr-aravindasamy','dr-vishali','physiotherapist'],
   };
-
   const currentUserRole = user?.role || '';
   const allowedSpecialists = SPECIALIST_OPTIONS.filter(s => s.roles.includes(currentUserRole));
 
   // ── Leave functions ────────────────────────────────────────────────────────
   const loadLeaves = async () => {
     setLeavesLoading(true);
-    const { data } = await supabase.from('leave_management').select('*').order('start_date', { ascending: false });
-    setLeaves(data || []); setLeavesLoading(false);
+    const { data, error } = await supabase.from('leave_management').select('*').order('start_date', { ascending: false });
+    if (error) { console.error('loadLeaves error:', error.message); }
+    setLeaves(data || []);
+    setLeavesLoading(false);
   };
 
   const checkLeaveConflicts = async (): Promise<any[]> => {
     if (!leaveForm.start_date || !leaveForm.end_date || !leaveForm.specialist) return [];
     const { data } = await supabase.from('appointments')
-      .select('*').eq('status', 'approved')
+      .select('*').eq('status','approved')
       .gte('appointment_date', leaveForm.start_date)
       .lte('appointment_date', leaveForm.end_date);
     if (!data?.length) return [];
-    const doctorKeys = SPECIALIST_DOCTOR_MAP[leaveForm.specialist] || [];
-    return data.filter((a: any) => doctorKeys.includes(a.doctor));
+    const keys = SPECIALIST_DOCTOR_MAP[leaveForm.specialist] || [];
+    return data.filter((a: any) => keys.includes(a.doctor));
   };
 
   const resetLeaveForm = () => {
-    setLeaveForm({ specialist: '', start_date: '', end_date: '', full_day: true, half_day_period: 'first_half', time_from: '', time_to: '', reason: '' });
+    setLeaveForm({ specialist:'', start_date:'', end_date:'', full_day:true, half_day_period:'first_half', time_from:'', time_to:'', reason:'' });
     setEditLeaveId(null);
   };
 
@@ -792,23 +715,15 @@ export default function Admin() {
       end_date: leaveForm.end_date,
       full_day: leaveForm.full_day,
       half_day_period: !leaveForm.full_day ? leaveForm.half_day_period : null,
-      time_from: !leaveForm.full_day && leaveForm.time_from ? leaveForm.time_from : null,
-      time_to:   !leaveForm.full_day && leaveForm.time_to   ? leaveForm.time_to   : null,
+      time_from: (!leaveForm.full_day && leaveForm.time_from) ? leaveForm.time_from : null,
+      time_to:   (!leaveForm.full_day && leaveForm.time_to)   ? leaveForm.time_to   : null,
       reason: leaveForm.reason || null,
       status: 'active',
     };
     const { data, error } = editLeaveId
       ? await supabase.from('leave_management').update(payload).eq('id', editLeaveId).select().single()
       : await supabase.from('leave_management').insert([payload]).select().single();
-    if (error) {
-      const msg = error.message || 'Unknown error';
-      if (msg.includes('schema cache') || msg.includes('does not exist')) {
-        toast.error('Table not found. Please run the SQL migration in Supabase first. See instructions below.');
-      } else {
-        toast.error('Failed to save leave: ' + msg);
-      }
-      return;
-    }
+    if (error) { toast.error('Failed to save leave: ' + error.message); return; }
     setShowLeaveWarning(false);
     if (leaveConflicts.length > 0 && data) setLeaveWaSaved(data);
     setLeaveConflicts([]);
@@ -818,7 +733,7 @@ export default function Admin() {
   };
 
   const cancelLeave = async (id: string) => {
-    if (!window.confirm('Cancel this leave record?')) return;
+    if (!window.confirm('Cancel this leave?')) return;
     const { error } = await supabase.from('leave_management').update({ status: 'cancelled' }).eq('id', id);
     if (error) { toast.error('Failed to cancel leave'); return; }
     setLeaves(prev => prev.map(l => l.id === id ? { ...l, status: 'cancelled' } : l));
@@ -834,12 +749,11 @@ export default function Admin() {
 
   // ── Flash News functions ───────────────────────────────────────────────────
   const loadFlashNews = async () => {
-    // Use maybeSingle() so no error is thrown when there are 0 rows
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('flash_news').select('*')
       .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1).maybeSingle();
+    if (error) { console.error('loadFlashNews:', error.message); return; }
     if (data) {
       setFlashNews(data);
       if (data.message) setFlashMsg(data.message);
@@ -849,11 +763,11 @@ export default function Admin() {
   };
 
   const saveFlashNews = async (active: boolean) => {
-    if (!flashMsg.trim()) { toast.error('Please enter a message first'); return; }
+    if (!flashMsg.trim()) { toast.error('Please enter a flash message'); return; }
     setFlashLoading(true);
     try {
       const now = new Date().toISOString();
-      const payload: Record<string, any> = {
+      const payload: Record<string,any> = {
         message: flashMsg.trim(),
         is_active: active,
         speed: flashSpeed,
@@ -863,27 +777,21 @@ export default function Admin() {
       if (active) payload.started_at = now;
       else payload.stopped_at = now;
 
+      let saveError: any = null;
       if (flashNews?.id) {
-        // Row exists — UPDATE it
         const { error } = await supabase.from('flash_news').update(payload).eq('id', flashNews.id);
-        if (error) throw error;
+        saveError = error;
       } else {
-        // No row yet — INSERT one
-        const { data, error } = await supabase
-          .from('flash_news').insert([payload]).select().maybeSingle();
-        if (error) throw error;
+        const { data, error } = await supabase.from('flash_news').insert([payload]).select().maybeSingle();
+        saveError = error;
         if (data) setFlashNews(data);
       }
+      if (saveError) throw saveError;
       await loadFlashNews();
-      const bell = '\uD83D\uDCE2';
-      toast.success(active ? `${bell} Flash news started!` : 'Flash news stopped');
+      const E_MEGA = '\uD83D\uDCE2';
+      toast.success(active ? `${E_MEGA} Flash news started!` : 'Flash news stopped');
     } catch (err: any) {
-      const msg = err?.message || 'Unknown error';
-      if (msg.includes('schema cache') || msg.includes('does not exist')) {
-        toast.error('Table not found. Please run the SQL migration in Supabase first.');
-      } else {
-        toast.error('Failed to save flash news: ' + msg);
-      }
+      toast.error('Failed to save flash news: ' + (err?.message || 'Unknown error'));
     }
     setFlashLoading(false);
   };
@@ -894,9 +802,6 @@ export default function Admin() {
       await supabase.from('appointments').delete().lt('appointment_date', cutoff.toISOString().split('T')[0]);
     } catch { }
   }, []);
-  // Call ensureTables once on first mount
-  useEffect(() => { ensureTables(); }, []);
-
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
@@ -1084,7 +989,7 @@ export default function Admin() {
     { id: 'users' as Tab, label: 'User Management', icon: Users, show: isMasterAdmin },
     { id: 'whatsapp' as Tab, label: 'WhatsApp', icon: MessageCircle, show: isMasterAdmin },
     { id: 'stories' as Tab, label: 'Patient Stories', icon: Heart, show: isMasterAdmin },
-    { id: 'leave' as Tab, label: 'Leave Management', icon: CalendarOff, show: true },  // all roles can access (filtered inside)
+    { id: 'leave' as Tab, label: 'Leave Management', icon: CalendarOff, show: true },
     { id: 'flashnews' as Tab, label: 'Flash News', icon: Megaphone, show: isMasterAdmin },
     { id: 'settings' as Tab, label: 'My Settings', icon: Lock, show: true },
   ].filter(n => n.show);
@@ -1656,15 +1561,15 @@ export default function Admin() {
                       if (!leaveForm.start_date || (leaveForm.start_date && leaveForm.end_date)) {
                         setLeaveForm(p => ({ ...p, start_date: date, end_date: date }));
                       } else {
-                        const newEnd = date >= leaveForm.start_date ? date : leaveForm.start_date;
-                        const newStart = date < leaveForm.start_date ? date : leaveForm.start_date;
-                        setLeaveForm(p => ({ ...p, start_date: newStart, end_date: newEnd }));
+                        const s = date < leaveForm.start_date ? date : leaveForm.start_date;
+                        const e = date >= leaveForm.start_date ? date : leaveForm.start_date;
+                        setLeaveForm(p => ({ ...p, start_date: s, end_date: e }));
                       }
                     }}
                     selectedStart={leaveForm.start_date}
                     selectedEnd={leaveForm.end_date}
                   />
-                  <p className="text-xs text-gray-400 mt-2">Click a date to select. Click two dates to set a range.</p>
+                  <p className="text-xs text-gray-400 mt-2">Click a date to set start, click again to set end date.</p>
                 </div>
 
                 {/* Form */}
@@ -1672,14 +1577,12 @@ export default function Admin() {
                   <h2 className="text-lg font-bold text-[#0A3D62] mb-4">{editLeaveId ? 'Edit Leave' : 'Apply Leave / Holiday'}</h2>
                   <div className="space-y-4">
 
-                    {/* 1. Specialist selector */}
+                    {/* 1. Specialist */}
                     <div>
                       <label className="text-xs font-semibold text-gray-600 mb-1 block">Select Specialist *</label>
-                      <select
-                        value={leaveForm.specialist}
+                      <select value={leaveForm.specialist}
                         onChange={e => setLeaveForm(p => ({ ...p, specialist: e.target.value }))}
-                        className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30"
-                      >
+                        className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30">
                         <option value="">-- Select Specialist --</option>
                         {allowedSpecialists.map(s => (
                           <option key={s.value} value={s.value}>{s.label}</option>
@@ -1687,7 +1590,7 @@ export default function Admin() {
                       </select>
                     </div>
 
-                    {/* 2. Date range */}
+                    {/* 2. Dates */}
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="text-xs font-semibold text-gray-600 mb-1 block">Start Date *</label>
@@ -1706,31 +1609,31 @@ export default function Admin() {
                     {/* 3. Duration */}
                     <div>
                       <label className="text-xs font-semibold text-gray-600 mb-1 block">Duration</label>
-                      <div className="flex gap-4">
-                        <label className="flex items-center gap-2 cursor-pointer">
+                      <div className="flex gap-6">
+                        <label className="flex items-center gap-2 cursor-pointer text-sm">
                           <input type="radio" checked={leaveForm.full_day} onChange={() => setLeaveForm(p => ({ ...p, full_day: true }))} />
-                          <span className="text-sm">Full Day</span>
+                          Full Day
                         </label>
-                        <label className="flex items-center gap-2 cursor-pointer">
+                        <label className="flex items-center gap-2 cursor-pointer text-sm">
                           <input type="radio" checked={!leaveForm.full_day} onChange={() => setLeaveForm(p => ({ ...p, full_day: false }))} />
-                          <span className="text-sm">Half Day</span>
+                          Half Day
                         </label>
                       </div>
                     </div>
 
-                    {/* 4. Half day options (shown only when Half Day selected) */}
+                    {/* 4. Half day options */}
                     {!leaveForm.full_day && (
-                      <div className="space-y-3 pl-2 border-l-2 border-[#0F9FA8]/30">
+                      <div className="space-y-3 pl-3 border-l-2 border-[#0F9FA8]/30">
                         <div>
                           <label className="text-xs font-semibold text-gray-600 mb-1 block">Half Day Period</label>
-                          <div className="flex gap-4">
-                            <label className="flex items-center gap-2 cursor-pointer">
+                          <div className="flex gap-6">
+                            <label className="flex items-center gap-2 cursor-pointer text-sm">
                               <input type="radio" checked={leaveForm.half_day_period === 'first_half'} onChange={() => setLeaveForm(p => ({ ...p, half_day_period: 'first_half' }))} />
-                              <span className="text-sm">First Half (Morning)</span>
+                              First Half (Morning)
                             </label>
-                            <label className="flex items-center gap-2 cursor-pointer">
+                            <label className="flex items-center gap-2 cursor-pointer text-sm">
                               <input type="radio" checked={leaveForm.half_day_period === 'second_half'} onChange={() => setLeaveForm(p => ({ ...p, half_day_period: 'second_half' }))} />
-                              <span className="text-sm">Second Half (Afternoon)</span>
+                              Second Half (Afternoon)
                             </label>
                           </div>
                         </div>
@@ -1763,18 +1666,22 @@ export default function Admin() {
                     </div>
 
                     <div className="flex gap-3 pt-1">
-                      <button onClick={() => saveLeave(false)} className="flex-1 px-5 py-2.5 bg-[#0A3D62] text-white rounded-xl text-sm font-semibold hover:bg-[#0A3D62]/90">
+                      <button onClick={() => saveLeave(false)}
+                        className="flex-1 px-5 py-2.5 bg-[#0A3D62] text-white rounded-xl text-sm font-semibold hover:bg-[#0A3D62]/90">
                         {editLeaveId ? 'Update Leave' : 'Save Leave'}
                       </button>
                       {editLeaveId && (
-                        <button onClick={resetLeaveForm} className="px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-semibold">Cancel</button>
+                        <button onClick={resetLeaveForm}
+                          className="px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-semibold">
+                          Cancel
+                        </button>
                       )}
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Leave Records Table */}
+              {/* Leave Records */}
               <div className="bg-white rounded-2xl shadow-card p-4 sm:p-6">
                 <h3 className="font-bold text-[#0A3D62] mb-4">Leave Records ({leaves.length})</h3>
                 {leavesLoading ? (
@@ -1782,64 +1689,58 @@ export default function Admin() {
                 ) : leaves.length === 0 ? (
                   <p className="text-gray-400 text-sm text-center py-8">No leave records yet.</p>
                 ) : (
-                  <div className="overflow-x-auto -mx-4 sm:mx-0">
+                  <div className="overflow-x-auto">
                     <table className="w-full min-w-[600px] text-sm">
                       <thead><tr className="border-b border-gray-200">
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Specialist</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Dates</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Duration</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Reason</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                        {['Specialist','Dates','Duration','Reason','Status','Actions'].map(h => (
+                          <th key={h} className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">{h}</th>
+                        ))}
                       </tr></thead>
                       <tbody>
                         {leaves.map((l, i) => {
-                          const specialistLabel = SPECIALIST_OPTIONS.find(s => s.value === l.specialist)?.label || l.specialist;
-                          const isClinicHoliday = l.specialist === 'clinic_holiday';
-                          const canCancel = (() => {
-                            const opt = SPECIALIST_OPTIONS.find(s => s.value === l.specialist);
-                            return opt ? opt.roles.includes(currentUserRole) : false;
-                          })();
+                          const spLabel = SPECIALIST_OPTIONS.find(s => s.value === l.specialist)?.label || l.specialist;
+                          const isHoliday = l.specialist === 'clinic_holiday';
+                          const opt = SPECIALIST_OPTIONS.find(s => s.value === l.specialist);
+                          const canAct = opt ? opt.roles.includes(currentUserRole) : false;
                           return (
                             <tr key={l.id} className={i%2===0?'':'bg-gray-50/50'}>
                               <td className="py-2.5 px-3">
-                                <span className={`text-xs px-2 py-1 rounded-full font-semibold ${isClinicHoliday ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-700'}`}>
-                                  {specialistLabel}
+                                <span className={`text-xs px-2 py-1 rounded-full font-semibold ${isHoliday?'bg-red-100 text-red-600':'bg-amber-100 text-amber-700'}`}>
+                                  {spLabel}
                                 </span>
                               </td>
-                              <td className="py-2.5 px-3 text-gray-600 whitespace-nowrap">
+                              <td className="py-2.5 px-3 text-gray-600 whitespace-nowrap text-xs">
                                 {l.start_date === l.end_date ? fmtDate(l.start_date) : `${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}`}
                               </td>
                               <td className="py-2.5 px-3 text-gray-500 text-xs">
-                                {l.full_day ? 'Full Day' : (
-                                  <span>
-                                    Half Day{l.half_day_period ? ` (${l.half_day_period === 'first_half' ? 'Morning' : 'Afternoon'})` : ''}
-                                    {l.time_from && l.time_to ? <><br/>{l.time_from} – {l.time_to}</> : null}
-                                  </span>
-                                )}
+                                {l.full_day ? 'Full Day' : `Half (${l.half_day_period==='first_half'?'AM':'PM'})${l.time_from&&l.time_to?' '+l.time_from+'–'+l.time_to:''}`}
                               </td>
-                              <td className="py-2.5 px-3 text-gray-500 max-w-[140px] truncate">{l.reason || '-'}</td>
+                              <td className="py-2.5 px-3 text-gray-500 text-xs max-w-[120px] truncate">{l.reason||'—'}</td>
                               <td className="py-2.5 px-3">
-                                <span className={`text-xs px-2 py-1 rounded-full font-semibold ${l.status === 'active' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
-                                  {l.status === 'active' ? 'Active' : 'Cancelled'}
+                                <span className={`text-xs px-2 py-1 rounded-full font-semibold ${l.status==='active'?'bg-green-100 text-green-600':'bg-gray-100 text-gray-500'}`}>
+                                  {l.status==='active'?'Active':'Cancelled'}
                                 </span>
                               </td>
                               <td className="py-2.5 px-3">
                                 <div className="flex items-center gap-1">
-                                  {l.status === 'active' && canCancel && (
-                                    <button onClick={() => cancelLeave(l.id)}
-                                      className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg" title="Cancel Leave">
+                                  {l.status==='active' && canAct && (
+                                    <button onClick={() => cancelLeave(l.id)} title="Cancel Leave"
+                                      className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg">
                                       <XCircle size={14}/>
                                     </button>
                                   )}
-                                  {l.status === 'active' && canCancel && (
-                                    <button onClick={() => { setEditLeaveId(l.id); setLeaveForm({ specialist: l.specialist, start_date: l.start_date, end_date: l.end_date, full_day: l.full_day, half_day_period: l.half_day_period || 'first_half', time_from: l.time_from || '', time_to: l.time_to || '', reason: l.reason || '' }); }}
-                                      className="p-1.5 text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10 rounded-lg" title="Edit">
+                                  {l.status==='active' && canAct && (
+                                    <button title="Edit"
+                                      onClick={() => { setEditLeaveId(l.id); setLeaveForm({ specialist:l.specialist, start_date:l.start_date, end_date:l.end_date, full_day:l.full_day, half_day_period:l.half_day_period||'first_half', time_from:l.time_from||'', time_to:l.time_to||'', reason:l.reason||'' }); }}
+                                      className="p-1.5 text-gray-400 hover:text-[#0F9FA8] hover:bg-[#0F9FA8]/10 rounded-lg">
                                       <Edit2 size={14}/>
                                     </button>
                                   )}
                                   {isMasterAdmin && (
-                                    <button onClick={() => deleteLeave(l.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Delete permanently"><Trash2 size={14}/></button>
+                                    <button onClick={() => deleteLeave(l.id)} title="Delete"
+                                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg">
+                                      <Trash2 size={14}/>
+                                    </button>
                                   )}
                                 </div>
                               </td>
@@ -1852,7 +1753,7 @@ export default function Admin() {
                 )}
               </div>
 
-              {/* Conflict Warning Modal — shows before saving leave */}
+              {/* Conflict Warning Modal */}
               {showLeaveWarning && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
                   <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -1861,79 +1762,44 @@ export default function Admin() {
                         <AlertCircle size={20} className="text-amber-600"/>
                       </div>
                       <div>
-                        <h3 className="font-bold text-[#0A3D62]">⚠️ Confirmed Appointments Found</h3>
-                        <p className="text-xs text-gray-500">{leaveConflicts.length} appointment{leaveConflicts.length>1?'s':''} already booked during this period</p>
+                        <h3 className="font-bold text-[#0A3D62]">Confirmed Appointments Found</h3>
+                        <p className="text-xs text-gray-500">{leaveConflicts.length} appointment{leaveConflicts.length>1?'s':''} booked during this period</p>
                       </div>
                     </div>
-
-                    <p className="text-gray-600 text-sm mb-4">
-                      The following patients have confirmed appointments during the requested leave period.
-                      Please notify them before proceeding. You can send a WhatsApp message, email, or call them directly.
-                    </p>
-
+                    <p className="text-sm text-gray-600 mb-4">Please notify each patient before proceeding. Use WhatsApp, Email, or Call.</p>
                     <div className="space-y-3 mb-5">
                       {leaveConflicts.map(a => {
-                        const specialistLabel = SPECIALIST_OPTIONS.find(s => s.value === leaveForm.specialist)?.label || leaveForm.specialist;
-                        const warn  = '\u26A0\uFE0F'; // ⚠️
-                        const calE  = '\uD83D\uDCC5'; // 📅
-                        const phone2= '\uD83D\uDCDE'; // 📞
-                        const hosp2 = '\uD83C\uDFE5'; // 🏥
-                        const waMsg = encodeURIComponent(
-`Hello ${a.patient_name},
+                        const spLabel = SPECIALIST_OPTIONS.find(s => s.value === leaveForm.specialist)?.label || leaveForm.specialist;
+                        const msgText = `Hello ${a.patient_name},
 
-${warn} Important Appointment Update
+Your appointment with ${spLabel} on ${fmtDate(a.appointment_date)} at ${a.appointment_time} has been cancelled due to leave.
 
-We regret to inform you that ${specialistLabel} is unavailable on ${fmtDate(a.appointment_date)} due to leave/unavailability.
+Kindly reply with your preferred new date and time to reschedule.
 
-Your scheduled appointment at ${a.appointment_time} has been cancelled.
+Contact: +91 96770 80778
 
-${calE} Kindly reply with your preferred new date and time, and our team will help reschedule your appointment at the earliest.
-
-For assistance, please contact:
-${phone2} +91 96770 80778
-
-We sincerely apologize for the inconvenience and appreciate your understanding.
-${hosp2} ARVI Ortho & Child Care`);
-                        const emailSubject = encodeURIComponent(`Appointment Cancellation — ${fmtDate(a.appointment_date)}`);
-                        const emailBody = encodeURIComponent(
-`Hello ${a.patient_name},
-
-We regret to inform you that ${specialistLabel} is unavailable on ${fmtDate(a.appointment_date)} due to leave/unavailability.
-
-Your scheduled appointment at ${a.appointment_time} has been cancelled.
-
-Kindly reply with your preferred new date and time, and our team will help reschedule your appointment at the earliest.
-
-For assistance, please contact us at +91 96770 80778.
-
-We sincerely apologize for the inconvenience and appreciate your understanding.
-
-Regards,
-ARVI Ortho & Child Care`);
-                        const phone = a.patient_phone.replace(/\D/g,'');
-                        const phoneForCall = a.patient_phone;
+Sorry for the inconvenience.
+ARVI Ortho & Child Care`;
+                        const waMsg = encodeURIComponent(msgText);
+                        const emailSubj = encodeURIComponent('Appointment Cancellation — ' + fmtDate(a.appointment_date));
+                        const emailBody = encodeURIComponent(msgText);
+                        const ph = (a.patient_phone||'').replace(/\D/g,'');
                         return (
                           <div key={a.id} className="bg-amber-50 rounded-xl p-3 border border-amber-100">
-                            <div className="flex items-start justify-between gap-2 mb-2">
-                              <div>
-                                <p className="text-sm font-semibold text-[#0A3D62]">{a.patient_name}</p>
-                                <p className="text-xs text-gray-500">{fmtDate(a.appointment_date)} at {a.appointment_time}</p>
-                                <p className="text-xs text-gray-400">{a.patient_phone}</p>
-                              </div>
-                            </div>
+                            <p className="text-sm font-semibold text-[#0A3D62]">{a.patient_name}</p>
+                            <p className="text-xs text-gray-500 mb-2">{fmtDate(a.appointment_date)} at {a.appointment_time} &bull; {a.patient_phone}</p>
                             <div className="flex flex-wrap gap-2">
-                              <a href={`https://wa.me/${phone}?text=${waMsg}`} target="_blank" rel="noopener noreferrer"
+                              <a href={`https://wa.me/${ph}?text=${waMsg}`} target="_blank" rel="noopener noreferrer"
                                 className="flex items-center gap-1 px-2.5 py-1.5 bg-[#25D366] text-white rounded-lg text-xs font-semibold">
-                                <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-                                WhatsApp
+                                <MessageCircle size={12}/> WhatsApp
                               </a>
                               {a.patient_email && (
-                                <a href={`mailto:${a.patient_email}?subject=${emailSubject}&body=${emailBody}`}
+                                <a href={`mailto:${a.patient_email}?subject=${emailSubj}&body=${emailBody}`}
                                   className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">
-                                  <MessageSquare size={12}/> Email
+                                  <Send size={12}/> Email
                                 </a>
                               )}
-                              <a href={`tel:${phoneForCall}`}
+                              <a href={`tel:${a.patient_phone}`}
                                 className="flex items-center gap-1 px-2.5 py-1.5 bg-[#0A3D62] text-white rounded-lg text-xs font-semibold">
                                 <Phone size={12}/> Call
                               </a>
@@ -1942,18 +1808,13 @@ ARVI Ortho & Child Care`);
                         );
                       })}
                     </div>
-
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-5 text-xs text-amber-700">
-                      ⚠️ Please notify all affected patients before applying the leave. Once you click "Apply Leave", the leave will be saved but appointments will <strong>not</strong> be auto-cancelled — you must update them manually.
-                    </div>
-
                     <div className="flex gap-3">
                       <button onClick={() => setShowLeaveWarning(false)}
-                        className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-sm font-semibold hover:bg-gray-200">
+                        className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-sm font-semibold">
                         Go Back
                       </button>
                       <button onClick={() => saveLeave(true)}
-                        className="flex-1 px-4 py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold hover:bg-amber-600">
+                        className="flex-1 px-4 py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold">
                         Apply Leave Anyway
                       </button>
                     </div>
@@ -1961,11 +1822,10 @@ ARVI Ortho & Child Care`);
                 </div>
               )}
 
-              {/* Post-save reminder panel (shown after leave is saved with conflicts) */}
               {leaveWaSaved && leaveConflicts.length > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-                  <p className="font-semibold text-amber-700 mb-1">📋 Reminder: Notify Affected Patients</p>
-                  <p className="text-sm text-amber-600 mb-3">Leave has been saved. Please ensure all {leaveConflicts.length} affected patient{leaveConflicts.length>1?'s have':' has'} been notified and appointments rescheduled.</p>
+                  <p className="font-semibold text-amber-700 mb-1">Reminder: Notify Affected Patients</p>
+                  <p className="text-sm text-amber-600 mb-2">Leave saved. Please ensure all {leaveConflicts.length} patient{leaveConflicts.length>1?'s have':' has'} been notified.</p>
                   <button onClick={() => { setLeaveWaSaved(null); setLeaveConflicts([]); }} className="text-xs text-amber-500 hover:underline">Dismiss</button>
                 </div>
               )}
