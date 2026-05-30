@@ -688,8 +688,10 @@ export default function Admin() {
 
   const checkLeaveConflicts = async (): Promise<any[]> => {
     if (!leaveForm.start_date || !leaveForm.end_date || !leaveForm.specialist) return [];
+    // Check both pending and approved appointments
     const { data } = await supabase.from('appointments')
-      .select('*').eq('status','approved')
+      .select('*')
+      .in('status', ['pending', 'approved'])
       .gte('appointment_date', leaveForm.start_date)
       .lte('appointment_date', leaveForm.end_date);
     if (!data?.length) return [];

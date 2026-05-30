@@ -5,15 +5,26 @@ import { generateTimeSlots, isSlotPast } from '../lib/timeSlots';
 import { toast } from '../lib/toast';
 
 const DOCTORS = [
-  { value: 'dr-aravindasamy', label: 'Dr. Aravindasamy M', spec: 'MS Orthopaedics', dept: 'Orthopaedic Care', leaveRole: 'doctor_aravind' },
-  { value: 'dr-vishali',      label: 'Dr. Vishali G',      spec: 'MD Paediatrics',  dept: 'Child Care',       leaveRole: 'doctor_vishali' },
-  { value: 'physiotherapist', label: 'Physiotherapist Expert', spec: 'BPT',        dept: 'Physiotherapy Services', leaveRole: 'physiotherapist' },
+  { value: 'dr-aravindasamy', label: 'Dr. Aravindasamy M', spec: 'MS Orthopaedics', dept: 'Orthopaedic Care', specialist: 'doctor_aravind' },
+  { value: 'dr-vishali',      label: 'Dr. Vishali G',      spec: 'MD Paediatrics',  dept: 'Child Care',       specialist: 'doctor_vishali' },
+  { value: 'physiotherapist', label: 'Physiotherapist Expert', spec: 'BPT',        dept: 'Physiotherapy Services', specialist: 'physiotherapist' },
 ];
 
 const TIME_SLOTS = generateTimeSlots();
 const CLINIC_NAME = 'ARVI Ortho & Child Care';
 
-type LeaveRecord = { id: string; leave_type: string; user_id?: string; clinic_name?: string; start_date: string; end_date: string; status: string; };
+// New schema: leave_management uses 'specialist' field
+type LeaveRecord = {
+  id: string;
+  specialist: string;   // 'doctor_aravind' | 'doctor_vishali' | 'physiotherapist' | 'clinic_holiday'
+  start_date: string;
+  end_date: string;
+  full_day: boolean;
+  half_day_period?: string;
+  time_from?: string;
+  time_to?: string;
+  status: string;
+};
 
 export default function Appointment() {
   const [form, setForm] = useState({
@@ -23,59 +34,54 @@ export default function Appointment() {
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [leaves, setLeaves] = useState<LeaveRecord[]>([]);
-  const [adminUsers, setAdminUsers] = useState<any[]>([]);
   const [leaveBlocked, setLeaveBlocked] = useState<{ blocked: boolean; message: string }>({ blocked: false, message: '' });
   const today = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
-    const fetchLeaveData = async () => {
-      const [leavesRes, usersRes] = await Promise.all([
-        supabase.from('leave_management').select('*').eq('status', 'active').gte('end_date', today),
-        supabase.from('admin_users').select('id, role, full_name').eq('is_active', true),
-      ]);
-      setLeaves(leavesRes.data || []);
-      setAdminUsers(usersRes.data || []);
+    const fetchLeaves = async () => {
+      const { data, error } = await supabase
+        .from('leave_management')
+        .select('*')
+        .eq('status', 'active')
+        .gte('end_date', today);
+      if (!error) setLeaves(data || []);
     };
-    fetchLeaveData();
+    fetchLeaves();
   }, []);
 
-  // Check leave whenever doctor or date changes
+  // Re-check whenever doctor or date changes
   useEffect(() => {
-    if (!form.doctor || !form.appointment_date) { setLeaveBlocked({ blocked: false, message: '' }); return; }
-    checkLeaveBlock(form.doctor, form.appointment_date);
-  }, [form.doctor, form.appointment_date, leaves, adminUsers]);
-
-  const checkLeaveBlock = (doctor: string, date: string) => {
-    if (!date || !doctor) return;
-    const d = new Date(date);
-
-    // Check clinic holiday
-    const clinicLeave = leaves.find(l =>
-      l.leave_type === 'clinic_holiday' &&
-      l.clinic_name === CLINIC_NAME &&
-      new Date(l.start_date) <= d && new Date(l.end_date) >= d
-    );
-    if (clinicLeave) {
-      setLeaveBlocked({ blocked: true, message: `Appointments are unavailable for ${CLINIC_NAME} on the selected date. Please choose another date.` });
+    if (!form.doctor || !form.appointment_date) {
+      setLeaveBlocked({ blocked: false, message: '' });
       return;
     }
+    checkLeaveBlock(form.doctor, form.appointment_date);
+  }, [form.doctor, form.appointment_date, leaves]);
 
-    // Check user leave
-    const docInfo = DOCTORS.find(doc => doc.value === doctor);
-    if (docInfo) {
-      const userLeave = leaves.find(l => {
-        if (l.leave_type !== 'user_leave') return false;
-        const user = adminUsers.find(u => u.id === l.user_id);
-        if (!user) return false;
-        const matchesRole = user.role === docInfo.leaveRole || user.role === 'master_admin';
-        return matchesRole && new Date(l.start_date) <= d && new Date(l.end_date) >= d;
+  // Check if a given doctor+date is blocked by leave
+  const checkLeaveBlock = (doctorValue: string, date: string) => {
+    const docInfo = DOCTORS.find(d => d.value === doctorValue);
+    if (!docInfo || !date) return;
+
+    const d = date; // 'YYYY-MM-DD' string comparison works correctly
+
+    const isBlocked = leaves.some(l => {
+      if (l.start_date > d || l.end_date < d) return false; // date not in range
+      if (l.specialist === 'clinic_holiday') return true;   // whole clinic blocked
+      return l.specialist === docInfo.specialist;           // this doctor blocked
+    });
+
+    if (isBlocked) {
+      const isClinicHoliday = leaves.some(l => l.specialist === 'clinic_holiday' && l.start_date <= d && l.end_date >= d);
+      setLeaveBlocked({
+        blocked: true,
+        message: isClinicHoliday
+          ? `${CLINIC_NAME} is closed on the selected date. Please choose another date or call us.`
+          : `${docInfo.label} is unavailable on the selected date. Please choose another date or call us.`,
       });
-      if (userLeave) {
-        setLeaveBlocked({ blocked: true, message: `Appointments are unavailable for the selected provider on this date. Please choose another date or call us directly for emergency.` });
-        return;
-      }
+    } else {
+      setLeaveBlocked({ blocked: false, message: '' });
     }
-    setLeaveBlocked({ blocked: false, message: '' });
   };
 
   const handleChange = (field: string, value: string) => {
@@ -105,33 +111,46 @@ export default function Appointment() {
     if (err) { setErrorMsg(err); return; }
     setErrorMsg(''); setStatus('loading');
 
-    // Backend leave validation before insert
-    const d = new Date(form.appointment_date);
-    const { data: activeLeaves } = await supabase.from('leave_management').select('*').eq('status', 'active').lte('start_date', form.appointment_date).gte('end_date', form.appointment_date);
+    // Server-side leave re-check before inserting (prevents race conditions)
+    const { data: activeLeaves } = await supabase
+      .from('leave_management')
+      .select('specialist, start_date, end_date')
+      .eq('status', 'active')
+      .lte('start_date', form.appointment_date)
+      .gte('end_date', form.appointment_date);
+
     if (activeLeaves?.length) {
-      const clinicBlocked = activeLeaves.some(l => l.leave_type === 'clinic_holiday');
-      if (clinicBlocked) { setStatus('error'); setErrorMsg(`Appointments are unavailable for ${CLINIC_NAME} on the selected date. Please choose another date.`); return; }
-      const docInfo = DOCTORS.find(doc => doc.value === form.doctor);
-      if (docInfo) {
-        const { data: users } = await supabase.from('admin_users').select('id, role').eq('is_active', true);
-        const userBlocked = activeLeaves.some(l => {
-          if (l.leave_type !== 'user_leave') return false;
-          const user = users?.find(u => u.id === l.user_id);
-          return user && user.role === docInfo.leaveRole;
-        });
-        if (userBlocked) { setStatus('error'); setErrorMsg('Appointments are unavailable for the selected provider on this date. Please choose another date or call us directly for emergency.'); return; }
+      const docInfo = DOCTORS.find(d => d.value === form.doctor);
+      const blocked = activeLeaves.some(l =>
+        l.specialist === 'clinic_holiday' || l.specialist === docInfo?.specialist
+      );
+      if (blocked) {
+        setStatus('error');
+        setErrorMsg('This slot is no longer available due to leave. Please choose another date.');
+        return;
       }
     }
 
     const { error } = await supabase.from('appointments').insert([{
-      patient_name: form.patient_name.trim(), patient_phone: form.patient_phone.trim(),
-      patient_email: form.patient_email.trim() || null, doctor: form.doctor,
-      appointment_date: form.appointment_date, appointment_time: form.appointment_time,
-      reason: form.reason.trim() || null, status: 'pending', payment_status: 'unpaid',
+      patient_name: form.patient_name.trim(),
+      patient_phone: form.patient_phone.trim(),
+      patient_email: form.patient_email.trim() || null,
+      doctor: form.doctor,
+      appointment_date: form.appointment_date,
+      appointment_time: form.appointment_time,
+      reason: form.reason.trim() || null,
+      status: 'pending',
+      payment_status: 'unpaid',
     }]);
 
-    if (error) { setStatus('error'); setErrorMsg('Failed to submit. Please try again or call us directly.'); toast.error('Submission failed'); }
-    else { setStatus('success'); toast.success('Appointment request submitted successfully!'); }
+    if (error) {
+      setStatus('error');
+      setErrorMsg('Failed to submit. Please try again or call us directly.');
+      toast.error('Submission failed');
+    } else {
+      setStatus('success');
+      toast.success('Appointment request submitted successfully!');
+    }
   };
 
   const resetForm = () => {
@@ -224,12 +243,11 @@ export default function Appointment() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5"><Calendar size={14} className="inline mr-1.5" />Preferred Date *</label>
                   <input type="date" min={today} value={form.appointment_date} onChange={e => handleChange('appointment_date', e.target.value)} required className="input-field" />
-                  <p className="text-xs text-[#0F9FA8] mt-1.5">✓ All days including Sunday available</p>
+                  <p className="text-xs text-[#0F9FA8] mt-1.5">All days including Sunday available</p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5"><Clock size={14} className="inline mr-1.5" />Preferred Time *</label>
 
-                  {/* Leave blocked message */}
                   {leaveBlocked.blocked && form.appointment_date ? (
                     <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl p-3">
                       <XCircle size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
