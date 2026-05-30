@@ -2,9 +2,9 @@ import { useState, useMemo } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 type LeaveRecord = {
-  id: string; leave_type: string; user_id?: string; clinic_name?: string;
+  id: string; specialist: string;
   start_date: string; end_date: string; status: string;
-  userName?: string;
+  userName?: string; // label passed from parent
 };
 
 interface Props {
@@ -26,7 +26,7 @@ export default function LeaveCalendar({ leaves, onDateClick, selectedStart, sele
   const firstDayOfMonth = new Date(viewYear, viewMonth, 1).getDay();
 
   const leaveMap = useMemo(() => {
-    const map: Record<string, { type: string; label: string }[]> = {};
+    const map: Record<string, { specialist: string; label: string }[]> = {};
     leaves.filter(l => l.status === 'active').forEach(l => {
       const start = new Date(l.start_date);
       const end = new Date(l.end_date);
@@ -34,8 +34,8 @@ export default function LeaveCalendar({ leaves, onDateClick, selectedStart, sele
         const key = d.toISOString().split('T')[0];
         if (!map[key]) map[key] = [];
         map[key].push({
-          type: l.leave_type,
-          label: l.leave_type === 'clinic_holiday' ? (l.clinic_name || 'Clinic') : (l.userName || 'User'),
+          specialist: l.specialist,
+          label: l.userName || l.specialist,
         });
       }
     });
@@ -80,8 +80,10 @@ export default function LeaveCalendar({ leaves, onDateClick, selectedStart, sele
           const isToday = dateStr === todayStr;
           const isPast = dateStr < todayStr;
           const leaveItems = leaveMap[dateStr] || [];
-          const hasUserLeave = leaveItems.some(l => l.type === 'user_leave');
-          const hasClinicLeave = leaveItems.some(l => l.type === 'clinic_holiday');
+          const hasClinicHoliday = leaveItems.some(l => l.specialist === 'clinic_holiday');
+          const hasAravind = leaveItems.some(l => l.specialist === 'doctor_aravind');
+          const hasVishali = leaveItems.some(l => l.specialist === 'doctor_vishali');
+          const hasPhysio = leaveItems.some(l => l.specialist === 'physiotherapist');
           const sel = isSelected(dateStr);
 
           return (
@@ -92,6 +94,7 @@ export default function LeaveCalendar({ leaves, onDateClick, selectedStart, sele
                 ${isPast ? 'opacity-40' : ''}
                 ${sel ? 'bg-[#0F9FA8]/10' : ''}
                 ${isToday && !sel ? 'bg-blue-50' : ''}
+                ${hasClinicHoliday ? 'bg-red-50' : ''}
               `}
             >
               <span className={`text-xs font-semibold w-6 h-6 flex items-center justify-center rounded-full leading-none
@@ -103,8 +106,10 @@ export default function LeaveCalendar({ leaves, onDateClick, selectedStart, sele
 
               {/* Leave indicators */}
               <div className="flex gap-0.5 mt-0.5 flex-wrap justify-center">
-                {hasClinicLeave && <div className="w-1.5 h-1.5 rounded-full bg-red-500" title="Clinic Holiday"/>}
-                {hasUserLeave && <div className="w-1.5 h-1.5 rounded-full bg-amber-500" title="User Leave"/>}
+                {hasClinicHoliday && <div className="w-1.5 h-1.5 rounded-full bg-red-500" title="Clinic Holiday"/>}
+                {hasAravind && !hasClinicHoliday && <div className="w-1.5 h-1.5 rounded-full bg-amber-500" title="Dr. Aravindasamy"/>}
+                {hasVishali && !hasClinicHoliday && <div className="w-1.5 h-1.5 rounded-full bg-purple-500" title="Dr. Vishali"/>}
+                {hasPhysio && !hasClinicHoliday && <div className="w-1.5 h-1.5 rounded-full bg-blue-400" title="Physiotherapist"/>}
               </div>
             </div>
           );
@@ -112,11 +117,12 @@ export default function LeaveCalendar({ leaves, onDateClick, selectedStart, sele
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap items-center gap-4 px-4 py-3 bg-gray-50 border-t border-gray-100 text-xs">
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3 bg-gray-50 border-t border-gray-100 text-xs">
         <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-red-500"/><span className="text-gray-500">Clinic Holiday</span></div>
-        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-amber-500"/><span className="text-gray-500">User Leave</span></div>
+        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-amber-500"/><span className="text-gray-500">Dr. Aravindasamy</span></div>
+        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-purple-500"/><span className="text-gray-500">Dr. Vishali</span></div>
+        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-blue-400"/><span className="text-gray-500">Physiotherapist</span></div>
         <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-[#0A3D62]"/><span className="text-gray-500">Today</span></div>
-        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-[#0F9FA8]"/><span className="text-gray-500">Selected</span></div>
       </div>
     </div>
   );
