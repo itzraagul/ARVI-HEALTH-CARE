@@ -39,6 +39,75 @@ type WaLog = {
   message_sent: string; status: string; error_message?: string; created_at: string;
 };
 
+// ─── Ensure DB tables exist (runs once on admin load) ────────────────────────
+async function ensureTables() {
+  try {
+    // Test if leave_management exists by doing a minimal SELECT
+    const { error: leaveErr } = await supabase
+      .from('leave_management').select('id').limit(1);
+
+    if (leaveErr && leaveErr.message.includes('schema cache')) {
+      // Table missing — create via Supabase SQL execution
+      await supabase.rpc('exec_sql', {
+        sql: `
+          CREATE TABLE IF NOT EXISTS leave_management (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            specialist text NOT NULL CHECK (specialist IN ('doctor_aravind','doctor_vishali','physiotherapist','clinic_holiday')),
+            start_date date NOT NULL,
+            end_date date NOT NULL,
+            full_day boolean NOT NULL DEFAULT true,
+            half_day_period text CHECK (half_day_period IN ('first_half','second_half')),
+            time_from time, time_to time, reason text,
+            status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','cancelled')),
+            created_by text, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+          );
+          ALTER TABLE leave_management ENABLE ROW LEVEL SECURITY;
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='leave_management' AND policyname='leave_sel') THEN
+              CREATE POLICY "leave_sel" ON leave_management FOR SELECT TO anon USING (true);
+              CREATE POLICY "leave_ins" ON leave_management FOR INSERT TO anon WITH CHECK (true);
+              CREATE POLICY "leave_upd" ON leave_management FOR UPDATE TO anon USING (true) WITH CHECK (true);
+              CREATE POLICY "leave_del" ON leave_management FOR DELETE TO anon USING (true);
+            END IF;
+          END $$;
+        `
+      });
+    }
+
+    // Test if flash_news exists
+    const { error: fnErr } = await supabase
+      .from('flash_news').select('id').limit(1);
+
+    if (fnErr && fnErr.message.includes('schema cache')) {
+      await supabase.rpc('exec_sql', {
+        sql: `
+          CREATE TABLE IF NOT EXISTS flash_news (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            message text NOT NULL DEFAULT '',
+            is_active boolean NOT NULL DEFAULT false,
+            speed text NOT NULL DEFAULT 'normal' CHECK (speed IN ('slow','normal','fast')),
+            theme text NOT NULL DEFAULT 'default' CHECK (theme IN ('default','emergency','info','success')),
+            created_by text, started_at timestamptz, stopped_at timestamptz,
+            created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+          );
+          ALTER TABLE flash_news ENABLE ROW LEVEL SECURITY;
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='flash_news' AND policyname='fn_sel') THEN
+              CREATE POLICY "fn_sel" ON flash_news FOR SELECT TO anon USING (true);
+              CREATE POLICY "fn_ins" ON flash_news FOR INSERT TO anon WITH CHECK (true);
+              CREATE POLICY "fn_upd" ON flash_news FOR UPDATE TO anon USING (true) WITH CHECK (true);
+              CREATE POLICY "fn_del" ON flash_news FOR DELETE TO anon USING (true);
+            END IF;
+          END $$;
+          INSERT INTO flash_news (message, is_active) VALUES ('', false);
+        `
+      });
+    }
+  } catch {
+    // Non-fatal — SQL editor is the authoritative way to create tables
+  }
+}
+
 function fmtDate(d?: string) {
   if (!d) return '';
   return new Date(d + (d.includes('T') ? '' : 'T12:00:00'))
@@ -68,22 +137,29 @@ const MEDIA_CATEGORIES = ['Clinic', 'Doctors', 'Promotions', 'Google Images', 'V
 function buildWaMessage(apt: Appointment): string {
   const dateStr = fmtDate(apt.appointment_date);
   const doctorName = doctorLabels[apt.doctor] || apt.doctor;
-  // Plain unicode string — emojis are native JS strings, no encoding issues
+  // Use Unicode escape sequences — prevents any build-tool or file-encoding
+  // corruption of emoji characters, which causes the ? box issue in WhatsApp.
+  const tick   = '\u2705';          // ✅
+  const cal    = '\uD83D\uDCC5';   // 📅
+  const clock  = '\uD83D\uDD50';   // 🕐
+  const doctor = '\uD83D\uDC68\u200D\u2695\uFE0F'; // 👨‍⚕️
+  const hosp   = '\uD83C\uDFE5';   // 🏥
+  const pray   = '\uD83D\uDE4F';   // 🙏
   return [
     `Hello ${apt.patient_name},`,
     ``,
-    `✅ Your appointment has been *confirmed* successfully!`,
+    `${tick} Your appointment has been *confirmed* successfully!`,
     ``,
-    `📅 *Date:* ${dateStr}`,
-    `🕐 *Time:* ${apt.appointment_time}`,
-    `👨‍⚕️ *Doctor:* ${doctorName}`,
-    `🏥 *Clinic:* ${CLINIC_NAME}`,
+    `${cal} *Date:* ${dateStr}`,
+    `${clock} *Time:* ${apt.appointment_time}`,
+    `${doctor} *Doctor:* ${doctorName}`,
+    `${hosp} *Clinic:* ${CLINIC_NAME}`,
     ``,
     `Please arrive 10 minutes before your scheduled time.`,
     ``,
     `For queries, call us at ${CLINIC_PHONE}.`,
     ``,
-    `Thank you for choosing ${CLINIC_NAME}. We look forward to seeing you! 🙏`,
+    `Thank you for choosing ${CLINIC_NAME}. We look forward to seeing you! ${pray}`,
   ].join('\n');
 }
 
@@ -103,13 +179,22 @@ async function sendWhatsAppMessage(apt: Appointment): Promise<{ success: boolean
   }
 
   // Build wa.me URL — encodeURIComponent handles all Unicode/emoji correctly
-  // IMPORTANT: open the window FIRST (synchronously, before any await) so
-  // browsers do not classify it as a popup and block it.
   const encoded = encodeURIComponent(message);
   const waUrl = `https://wa.me/${phone}?text=${encoded}`;
-  window.open(waUrl, '_blank', 'noopener,noreferrer');
 
-  // Fire-and-forget DB logging after window is already open
+  // Use programmatic <a> click instead of window.open:
+  // - Avoids popup blockers (treated as user-initiated navigation)
+  // - Avoids double-open bug
+  // - Opens in new tab reliably
+  const a = document.createElement('a');
+  a.href = waUrl;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  // Fire-and-forget DB logging
   try {
     await supabase.from('whatsapp_logs').insert([{
       appointment_id: apt.id,
@@ -715,7 +800,15 @@ export default function Admin() {
     const { data, error } = editLeaveId
       ? await supabase.from('leave_management').update(payload).eq('id', editLeaveId).select().single()
       : await supabase.from('leave_management').insert([payload]).select().single();
-    if (error) { toast.error('Failed to save leave: ' + error.message); return; }
+    if (error) {
+      const msg = error.message || 'Unknown error';
+      if (msg.includes('schema cache') || msg.includes('does not exist')) {
+        toast.error('Table not found. Please run the SQL migration in Supabase first. See instructions below.');
+      } else {
+        toast.error('Failed to save leave: ' + msg);
+      }
+      return;
+    }
     setShowLeaveWarning(false);
     if (leaveConflicts.length > 0 && data) setLeaveWaSaved(data);
     setLeaveConflicts([]);
@@ -741,16 +834,27 @@ export default function Admin() {
 
   // ── Flash News functions ───────────────────────────────────────────────────
   const loadFlashNews = async () => {
-    const { data } = await supabase.from('flash_news').select('*').order('created_at', { ascending: false }).limit(1).single();
-    if (data) { setFlashNews(data); if (data.message) setFlashMsg(data.message); setFlashSpeed(data.speed||'normal'); setFlashTheme(data.theme||'default'); }
+    // Use maybeSingle() so no error is thrown when there are 0 rows
+    const { data } = await supabase
+      .from('flash_news').select('*')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (data) {
+      setFlashNews(data);
+      if (data.message) setFlashMsg(data.message);
+      setFlashSpeed(data.speed || 'normal');
+      setFlashTheme(data.theme || 'default');
+    }
   };
 
   const saveFlashNews = async (active: boolean) => {
+    if (!flashMsg.trim()) { toast.error('Please enter a message first'); return; }
     setFlashLoading(true);
     try {
       const now = new Date().toISOString();
       const payload: Record<string, any> = {
-        message: flashMsg,
+        message: flashMsg.trim(),
         is_active: active,
         speed: flashSpeed,
         theme: flashTheme,
@@ -760,17 +864,26 @@ export default function Admin() {
       else payload.stopped_at = now;
 
       if (flashNews?.id) {
+        // Row exists — UPDATE it
         const { error } = await supabase.from('flash_news').update(payload).eq('id', flashNews.id);
         if (error) throw error;
       } else {
-        const { data, error } = await supabase.from('flash_news').insert([payload]).select().single();
+        // No row yet — INSERT one
+        const { data, error } = await supabase
+          .from('flash_news').insert([payload]).select().maybeSingle();
         if (error) throw error;
         if (data) setFlashNews(data);
       }
       await loadFlashNews();
-      toast.success(active ? '📢 Flash news started!' : 'Flash news stopped');
+      const bell = '\uD83D\uDCE2';
+      toast.success(active ? `${bell} Flash news started!` : 'Flash news stopped');
     } catch (err: any) {
-      toast.error('Failed to save flash news: ' + (err?.message || 'Unknown error'));
+      const msg = err?.message || 'Unknown error';
+      if (msg.includes('schema cache') || msg.includes('does not exist')) {
+        toast.error('Table not found. Please run the SQL migration in Supabase first.');
+      } else {
+        toast.error('Failed to save flash news: ' + msg);
+      }
     }
     setFlashLoading(false);
   };
@@ -781,6 +894,9 @@ export default function Admin() {
       await supabase.from('appointments').delete().lt('appointment_date', cutoff.toISOString().split('T')[0]);
     } catch { }
   }, []);
+  // Call ensureTables once on first mount
+  useEffect(() => { ensureTables(); }, []);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
@@ -1758,22 +1874,26 @@ export default function Admin() {
                     <div className="space-y-3 mb-5">
                       {leaveConflicts.map(a => {
                         const specialistLabel = SPECIALIST_OPTIONS.find(s => s.value === leaveForm.specialist)?.label || leaveForm.specialist;
+                        const warn  = '\u26A0\uFE0F'; // ⚠️
+                        const calE  = '\uD83D\uDCC5'; // 📅
+                        const phone2= '\uD83D\uDCDE'; // 📞
+                        const hosp2 = '\uD83C\uDFE5'; // 🏥
                         const waMsg = encodeURIComponent(
 `Hello ${a.patient_name},
 
-⚠️ Important Appointment Update
+${warn} Important Appointment Update
 
 We regret to inform you that ${specialistLabel} is unavailable on ${fmtDate(a.appointment_date)} due to leave/unavailability.
 
 Your scheduled appointment at ${a.appointment_time} has been cancelled.
 
-📅 Kindly reply with your preferred new date and time, and our team will help reschedule your appointment at the earliest.
+${calE} Kindly reply with your preferred new date and time, and our team will help reschedule your appointment at the earliest.
 
 For assistance, please contact:
-📞 +91 96770 80778
+${phone2} +91 96770 80778
 
 We sincerely apologize for the inconvenience and appreciate your understanding.
-🏥 ARVI Ortho & Child Care`);
+${hosp2} ARVI Ortho & Child Care`);
                         const emailSubject = encodeURIComponent(`Appointment Cancellation — ${fmtDate(a.appointment_date)}`);
                         const emailBody = encodeURIComponent(
 `Hello ${a.patient_name},
