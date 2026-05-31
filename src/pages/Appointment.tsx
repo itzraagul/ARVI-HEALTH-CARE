@@ -58,27 +58,77 @@ export default function Appointment() {
     checkLeaveBlock(form.doctor, form.appointment_date);
   }, [form.doctor, form.appointment_date, leaves]);
 
-  // Check if a given doctor+date is blocked by leave
-  const checkLeaveBlock = (doctorValue: string, date: string) => {
+  // Compute blocked slots for a doctor+date based on leave records
+  const getBlockedInfo = (doctorValue: string, date: string) => {
     const docInfo = DOCTORS.find(d => d.value === doctorValue);
-    if (!docInfo || !date) return;
+    if (!docInfo || !date) return { allDay: false, message: '', blockedTimes: [] as string[] };
+    const matchingLeaves = leaves.filter(l => {
+      if (l.status !== 'active') return false;
+      if (l.start_date > date || l.end_date < date) return false;
+      if (l.specialist === 'clinic_holiday') return true;
+      return l.specialist === docInfo.specialist;
+    });
+    if (!matchingLeaves.length) return { allDay: false, message: '', blockedTimes: [] as string[] };
 
-    const d = date; // 'YYYY-MM-DD' string comparison works correctly
+    // Full-day or clinic holiday
+    const fullLeave = matchingLeaves.find(l => l.full_day || l.specialist === 'clinic_holiday');
+    if (fullLeave) {
+      return {
+        allDay: true,
+        blockedTimes: [] as string[],
+        message: fullLeave.specialist === 'clinic_holiday'
+          ? `${CLINIC_NAME} is closed on this date. Please choose another date.`
+          : `${docInfo.label} is on full-day leave. Please choose another date.`,
+      };
+    }
 
-    const isBlocked = leaves.some(l => {
-      if (l.start_date > d || l.end_date < d) return false; // date not in range
-      if (l.specialist === 'clinic_holiday') return true;   // whole clinic blocked
-      return l.specialist === docInfo.specialist;           // this doctor blocked
+    // Half-day — determine which time slots are blocked
+    const hl = matchingLeaves[0];
+    const toMins = (s: string) => {
+      const [timePart, period] = s.trim().split(' ');
+      const [h, m = 0] = timePart.split(':').map(Number);
+      const pm = period?.toUpperCase() === 'PM' && h !== 12;
+      const am = period?.toUpperCase() === 'AM' && h === 12;
+      return (pm ? h + 12 : am ? 0 : h) * 60 + m;
+    };
+
+    let fromMins: number;
+    let toMins2: number;
+    if (hl.time_from && hl.time_to) {
+      fromMins = toMins(hl.time_from);
+      toMins2  = toMins(hl.time_to);
+    } else if (hl.half_day_period === 'first_half') {
+      fromMins = 0; toMins2 = 13 * 60;
+    } else {
+      fromMins = 13 * 60; toMins2 = 24 * 60;
+    }
+
+    const allSlots = [...TIME_SLOTS.morning, ...TIME_SLOTS.afternoon, ...TIME_SLOTS.night];
+    const blockedTimes = allSlots.filter(slot => {
+      const sm = toMins(slot);
+      return sm >= fromMins && sm < toMins2;
     });
 
-    if (isBlocked) {
-      const isClinicHoliday = leaves.some(l => l.specialist === 'clinic_holiday' && l.start_date <= d && l.end_date >= d);
-      setLeaveBlocked({
-        blocked: true,
-        message: isClinicHoliday
-          ? `${CLINIC_NAME} is closed on the selected date. Please choose another date or call us.`
-          : `${docInfo.label} is unavailable on the selected date. Please choose another date or call us.`,
-      });
+    const rangeStr = hl.time_from && hl.time_to
+      ? `${hl.time_from} – ${hl.time_to}`
+      : hl.half_day_period === 'first_half' ? 'morning (before 1 PM)' : 'afternoon/evening (after 1 PM)';
+
+    return {
+      allDay: false,
+      blockedTimes,
+      message: `${docInfo.label} is unavailable ${rangeStr} on this date. Please select a different time.`,
+    };
+  };
+
+  const [blockedSlots, setBlockedSlots] = useState<string[]>([]);
+
+  const checkLeaveBlock = (doctorValue: string, date: string) => {
+    const info = getBlockedInfo(doctorValue, date);
+    setBlockedSlots(info.blockedTimes);
+    if (info.allDay) {
+      setLeaveBlocked({ blocked: true, message: info.message });
+    } else if (info.blockedTimes.length > 0) {
+      setLeaveBlocked({ blocked: false, message: info.message });
     } else {
       setLeaveBlocked({ blocked: false, message: '' });
     }
@@ -101,6 +151,7 @@ export default function Appointment() {
     if (!form.appointment_date) return 'Please select a date';
     if (!form.appointment_time) return 'Please select a time slot';
     if (isSlotPast(form.appointment_date, form.appointment_time)) return 'Selected time has already passed';
+    if (blockedSlots.includes(form.appointment_time)) return 'The selected time slot is unavailable due to doctor\'s leave. Please choose a different time.';
     if (leaveBlocked.blocked) return leaveBlocked.message;
     return null;
   };
@@ -264,13 +315,17 @@ export default function Appointment() {
                           <p className="text-xs font-medium text-gray-400 mb-1.5">{label}</p>
                           <div className="flex flex-wrap gap-1.5">
                             {slots.map(t => {
-                              const past = isSlotPast(form.appointment_date, t);
+                              const past    = isSlotPast(form.appointment_date, t);
+                              const onLeave = blockedSlots.includes(t);
+                              const disabled = past || onLeave;
                               return (
-                                <button key={t} type="button" disabled={past}
-                                  onClick={() => !past && handleChange('appointment_time', t)}
+                                <button key={t} type="button" disabled={disabled}
+                                  onClick={() => !disabled && handleChange('appointment_time', t)}
+                                  title={onLeave ? 'Doctor unavailable at this time' : undefined}
                                   className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
                                     form.appointment_time === t ? 'bg-[#0F9FA8] text-white shadow-sm' :
-                                    past ? 'bg-gray-100 text-gray-300 cursor-not-allowed' :
+                                    onLeave ? 'bg-amber-50 text-amber-400 cursor-not-allowed line-through' :
+                                    past    ? 'bg-gray-100 text-gray-300 cursor-not-allowed' :
                                     'bg-gray-100 text-gray-600 hover:bg-[#0F9FA8]/10 hover:text-[#0F9FA8]'
                                   }`}>{t}</button>
                               );

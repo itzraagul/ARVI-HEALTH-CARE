@@ -558,6 +558,8 @@ export default function Admin() {
   const [leaveConflicts, setLeaveConflicts] = useState<any[]>([]);
   const [showLeaveWarning, setShowLeaveWarning] = useState(false);
   const [leaveWaSaved, setLeaveWaSaved] = useState<LeaveRecord | null>(null);
+  // Approval-time leave warning
+  const [approvalLeaveWarning, setApprovalLeaveWarning] = useState<{apt: any; leaveInfo: string} | null>(null);
   const [editLeaveId, setEditLeaveId] = useState<string | null>(null);
 
   // ── Flash News ────────────────────────────────────────────────────────────
@@ -567,6 +569,7 @@ export default function Admin() {
   const [flashSpeed, setFlashSpeed] = useState('normal');
   const [flashTheme, setFlashTheme] = useState('default');
   const [flashFontSize, setFlashFontSize] = useState('normal');
+  const [flashFontStyle, setFlashFontStyle] = useState('inter');
   const [flashLoading, setFlashLoading] = useState(false);
 
   const [showUserModal, setShowUserModal] = useState(false);
@@ -763,6 +766,7 @@ export default function Admin() {
       setFlashSpeed(data.speed || 'normal');
       setFlashTheme(data.theme || 'default');
       setFlashFontSize(data.font_size || 'normal');
+      setFlashFontStyle(data.font_style || 'inter');
     }
   };
 
@@ -777,6 +781,7 @@ export default function Admin() {
         speed: flashSpeed,
         theme: flashTheme,
         font_size: flashFontSize,
+        font_style: flashFontStyle,
         updated_at: now,
       };
       if (active) payload.started_at = now;
@@ -852,23 +857,90 @@ export default function Admin() {
   useEffect(() => { if (tab === 'leave') { loadLeaves(); } }, [tab]);
   useEffect(() => { if (tab === 'flashnews') loadFlashNews(); }, [tab]);
 
-  const updateStatus = async (id: string, newStatus: string) => {
-    const { error } = await supabase.from('appointments')
-      .update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', id);
-    if (error) { toast.error('Failed to update status'); return; }
-    setAppointments(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a));
-    toast.success(`Appointment ${newStatus}`);
+  // Check if an appointment falls on a leave period for its doctor
+  const checkApptLeaveConflict = (apt: any): string => {
+    if (!apt || !apt.appointment_date) return '';
+    const d = apt.appointment_date;
+    const t = apt.appointment_time || '';
 
-    if (newStatus === 'approved' && waEnabled) {
+    // Find doctor's specialist key
+    const doctorSpecialist = Object.entries(SPECIALIST_DOCTOR_MAP)
+      .find(([, keys]) => keys.includes(apt.doctor))?.[0];
+    if (!doctorSpecialist) return '';
+
+    const conflicting = leaves.filter(l => {
+      if (l.status !== 'active') return false;
+      if (l.start_date > d || l.end_date < d) return false;
+      if (l.specialist !== 'clinic_holiday' && l.specialist !== doctorSpecialist) return false;
+      return true;
+    });
+
+    if (!conflicting.length) return '';
+
+    const leave = conflicting[0];
+    const spLabel = SPECIALIST_OPTIONS.find(s => s.value === leave.specialist)?.label || leave.specialist;
+
+    if (leave.specialist === 'clinic_holiday') {
+      return `Clinic Holiday declared on ${fmtDate(d)}. The whole clinic is marked unavailable.`;
+    }
+    if (leave.full_day) {
+      return `${spLabel} is on full-day leave on ${fmtDate(d)}.`;
+    }
+    // Half day — check if appointment time falls in the unavailable window
+    if (leave.time_from && leave.time_to && t) {
+      // Convert time strings to comparable format
+      const toMins = (s: string) => {
+        const [h, m] = s.replace(/[APM ]/gi,'').split(':').map(Number);
+        const isPM = s.toLowerCase().includes('pm') && h !== 12;
+        const isAM = s.toLowerCase().includes('am') && h === 12;
+        return (isPM ? h + 12 : isAM ? 0 : h) * 60 + (m || 0);
+      };
+      const aptMins  = toMins(t);
+      const fromMins = toMins(leave.time_from);
+      const toMins2  = toMins(leave.time_to);
+      if (aptMins >= fromMins && aptMins <= toMins2) {
+        return `${spLabel} is unavailable from ${leave.time_from} to ${leave.time_to} on ${fmtDate(d)} (half-day leave). Appointment time ${t} falls in this window.`;
+      }
+    }
+    const period = leave.half_day_period === 'first_half' ? 'morning (first half)' : 'afternoon (second half)';
+    return `${spLabel} is on half-day leave (${period}) on ${fmtDate(d)}.`;
+  };
+
+  const performApproval = async (id: string) => {
+    const { error } = await supabase.from('appointments')
+      .update({ status: 'approved', updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) { toast.error('Failed to approve'); return; }
+    setAppointments(prev => prev.map(a => a.id === id ? { ...a, status: 'approved' } : a));
+    setApprovalLeaveWarning(null);
+    toast.success('Appointment approved');
+    if (waEnabled) {
       const apt = appointments.find(a => a.id === id);
       if (apt && !apt.whatsapp_sent) {
         const result = await sendWhatsAppMessage({ ...apt, status: 'approved' });
         if (result.success) {
           setAppointments(prev => prev.map(a => a.id === id ? { ...a, whatsapp_sent: true } : a));
-          toast.success(`WhatsApp opened for ${apt.patient_name}`);
         }
       }
     }
+  };
+
+  const updateStatus = async (id: string, newStatus: string) => {
+    // For approvals: check if this appointment falls on a leave period first
+    if (newStatus === 'approved') {
+      const apt = appointments.find(a => a.id === id);
+      const warning = apt ? checkApptLeaveConflict(apt) : '';
+      if (warning) {
+        setApprovalLeaveWarning({ apt, leaveInfo: warning });
+        return; // Show warning modal — user must confirm
+      }
+      await performApproval(id);
+      return;
+    }
+    const { error } = await supabase.from('appointments')
+      .update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) { toast.error('Failed to update status'); return; }
+    setAppointments(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a));
+    toast.success(`Appointment ${newStatus}`);
   };
 
   const toggleWaEnabled = async () => {
@@ -1758,7 +1830,51 @@ export default function Admin() {
                 )}
               </div>
 
-              {/* Conflict Warning Modal */}
+              {/* ── Approval Leave Warning Modal ──────────────────────────────────── */}
+              {approvalLeaveWarning && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                        <AlertCircle size={24} className="text-amber-600"/>
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-[#0A3D62] text-lg">Leave Conflict Warning</h3>
+                        <p className="text-xs text-gray-500">This appointment was booked during a leave period</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+                      <p className="text-sm font-semibold text-amber-800 mb-1">
+                        ⚠️ {approvalLeaveWarning.leaveInfo}
+                      </p>
+                    </div>
+
+                    <div className="bg-gray-50 rounded-xl p-3 mb-5 text-sm space-y-1">
+                      <p><span className="font-semibold text-gray-600">Patient:</span> {approvalLeaveWarning.apt.patient_name}</p>
+                      <p><span className="font-semibold text-gray-600">Date:</span> {fmtDate(approvalLeaveWarning.apt.appointment_date)} at {approvalLeaveWarning.apt.appointment_time}</p>
+                      <p><span className="font-semibold text-gray-600">Doctor:</span> {doctorLabels[approvalLeaveWarning.apt.doctor] || approvalLeaveWarning.apt.doctor}</p>
+                    </div>
+
+                    <p className="text-sm text-gray-600 mb-5">
+                      Do you still want to approve this appointment? The patient will receive a WhatsApp confirmation. Consider contacting them to discuss rescheduling.
+                    </p>
+
+                    <div className="flex gap-3">
+                      <button onClick={() => setApprovalLeaveWarning(null)}
+                        className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-sm font-semibold hover:bg-gray-200">
+                        Cancel
+                      </button>
+                      <button onClick={() => performApproval(approvalLeaveWarning.apt.id)}
+                        className="flex-1 px-4 py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold hover:bg-amber-600">
+                        Approve Anyway
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+      {/* Conflict Warning Modal */}
               {showLeaveWarning && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
                   <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -1887,13 +2003,33 @@ ARVI Ortho & Child Care`;
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Font Size</label>
+                    <label className="text-xs font-semibold text-gray-600 mb-1 block">Font Size</label>
                     <select value={flashFontSize} onChange={e=>setFlashFontSize(e.target.value)}
                       className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30">
                       <option value="normal">Normal (14px)</option>
                       <option value="medium">Medium (16px)</option>
                       <option value="large">Large (18px)</option>
                     </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-5">
+                  <div className="sm:col-span-4">
+                    <label className="text-xs font-semibold text-gray-600 mb-2 block">Font Style</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {([
+                        { value: 'inter',     label: 'Inter',     sample: 'Aa Breaking News' },
+                        { value: 'poppins',   label: 'Poppins',   sample: 'Aa Breaking News' },
+                        { value: 'merriweather', label: 'Merriweather', sample: 'Aa Breaking News' },
+                        { value: 'roboto-mono',  label: 'Mono',    sample: 'Aa Breaking News' },
+                      ] as const).map(f => (
+                        <button key={f.value} type="button"
+                          onClick={() => setFlashFontStyle(f.value)}
+                          className={`p-3 rounded-xl border-2 text-left transition-all ${flashFontStyle === f.value ? 'border-[#0F9FA8] bg-[#0F9FA8]/5' : 'border-gray-200 hover:border-[#0F9FA8]/40'}`}>
+                          <p className="text-xs font-semibold text-gray-500 mb-1">{f.label}</p>
+                          <p className="text-sm text-[#0A3D62] truncate" style={{ fontFamily: f.value === 'inter' ? 'Inter,sans-serif' : f.value === 'poppins' ? 'Poppins,sans-serif' : f.value === 'merriweather' ? 'Merriweather,serif' : 'Roboto Mono,monospace' }}>{f.sample}</p>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
 

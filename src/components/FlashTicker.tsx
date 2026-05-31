@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 
 type FlashNews = {
   id: string; message: string; is_active: boolean;
-  speed: string; theme: string; font_size: string;
+  speed: string; theme: string; font_size: string; font_style: string;
 };
 
 const themeStyles: Record<string, string> = {
@@ -19,18 +19,22 @@ const speedDuration: Record<string, string> = {
 };
 
 const fontSizeClass: Record<string, string> = {
-  normal: 'text-sm',
-  medium: 'text-base',
-  large:  'text-lg',
+  normal: 'text-sm', medium: 'text-base', large: 'text-lg',
+};
+
+const fontFamilyMap: Record<string, string> = {
+  inter:          'Inter, sans-serif',
+  poppins:        'Poppins, sans-serif',
+  merriweather:   'Merriweather, serif',
+  'roboto-mono':  '"Roboto Mono", monospace',
 };
 
 export default function FlashTicker() {
-  const [news, setNews] = useState<FlashNews | null>(null);
+  const [news, setNews]         = useState<FlashNews | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [tickerKey, setTickerKey] = useState(0);
   const tickerRef = useRef<HTMLDivElement>(null);
 
-  // Notify App.tsx about ticker visibility so it can adjust page top padding
   const notifyHeight = (visible: boolean, el?: HTMLDivElement | null) => {
     const h = visible && el ? el.offsetHeight : 0;
     window.dispatchEvent(new CustomEvent('ticker-resize', { detail: { height: h } }));
@@ -48,7 +52,9 @@ export default function FlashTicker() {
       if (error) { console.warn('FlashTicker:', error.message); return; }
       if (data && data.message?.trim()) {
         setNews(prev => {
-          if (!prev || prev.id !== data.id || prev.message !== data.message || !prev.is_active) {
+          if (!prev || prev.id !== data.id || prev.message !== data.message
+              || prev.font_style !== data.font_style || prev.font_size !== data.font_size
+              || prev.theme !== data.theme || prev.speed !== data.speed) {
             setDismissed(false);
             setTickerKey(k => k + 1);
           }
@@ -71,11 +77,9 @@ export default function FlashTicker() {
     return () => { supabase.removeChannel(channel); clearInterval(interval); };
   }, []);
 
-  // When visibility changes, notify App.tsx with our height
   useEffect(() => {
     const visible = !!(news && news.is_active && news.message?.trim() && !dismissed);
     if (visible) {
-      // Small delay to let DOM settle
       setTimeout(() => notifyHeight(true, tickerRef.current), 50);
     } else {
       notifyHeight(false);
@@ -84,15 +88,17 @@ export default function FlashTicker() {
 
   if (!news || !news.is_active || !news.message.trim() || dismissed) return null;
 
-  const theme    = themeStyles[news.theme]     || themeStyles.default;
-  const duration = speedDuration[news.speed]   || speedDuration.normal;
-  const fontSize = fontSizeClass[news.font_size] || fontSizeClass.normal;
+  const theme      = themeStyles[news.theme]          || themeStyles.default;
+  const duration   = speedDuration[news.speed]        || speedDuration.normal;
+  const fontSize   = fontSizeClass[news.font_size]    || fontSizeClass.normal;
+  const fontFamily = fontFamilyMap[news.font_style]   || fontFamilyMap.inter;
 
   return (
     <div ref={tickerRef} key={tickerKey}
       className={`w-full flex items-center overflow-hidden border-b border-white/20 ${theme}`}
       style={{ minHeight: '36px' }}>
       <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Roboto+Mono:wght@400;500&family=Poppins:wght@400;600&display=swap');
         @keyframes arvi-scroll {
           0%   { transform: translateX(100vw); }
           100% { transform: translateX(-100%); }
@@ -115,7 +121,8 @@ export default function FlashTicker() {
 
       {/* Scrolling message */}
       <div className="flex-1 overflow-hidden">
-        <span className={`arvi-scroll font-medium py-1.5 ${fontSize}`}>
+        <span className={`arvi-scroll font-medium py-1.5 ${fontSize}`}
+          style={{ fontFamily }}>
           {news.message}
         </span>
       </div>
