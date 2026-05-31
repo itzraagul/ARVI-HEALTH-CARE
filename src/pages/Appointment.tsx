@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Calendar, Clock, User, Stethoscope, FileText, Phone, CheckCircle, AlertCircle, Mail, XCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { generateTimeSlots, isSlotPast } from '../lib/timeSlots';
+import { generateTimeSlots, isSlotPast, isSunday } from '../lib/timeSlots';
 import { toast } from '../lib/toast';
 
 const DOCTORS = [
@@ -10,7 +10,7 @@ const DOCTORS = [
   { value: 'physiotherapist', label: 'Physiotherapist Expert', spec: 'BPT',        dept: 'Physiotherapy Services', specialist: 'physiotherapist' },
 ];
 
-const TIME_SLOTS = generateTimeSlots();
+// TIME_SLOTS are generated dynamically per selected date in the component
 const CLINIC_NAME = 'ARVI Ortho & Child Care';
 
 // New schema: leave_management uses 'specialist' field
@@ -58,6 +58,14 @@ export default function Appointment() {
     checkLeaveBlock(form.doctor, form.appointment_date);
   }, [form.doctor, form.appointment_date, leaves]);
 
+  const toMins = (s: string) => {
+    const [timePart, period] = s.trim().split(' ');
+    const [h, m = 0] = timePart.split(':').map(Number);
+    const pm = period?.toUpperCase() === 'PM' && h !== 12;
+    const am = period?.toUpperCase() === 'AM' && h === 12;
+    return (pm ? h + 12 : am ? 0 : h) * 60 + m;
+  };
+
   // Compute blocked slots for a doctor+date based on leave records
   const getBlockedInfo = (doctorValue: string, date: string) => {
     const docInfo = DOCTORS.find(d => d.value === doctorValue);
@@ -70,8 +78,11 @@ export default function Appointment() {
     });
     if (!matchingLeaves.length) return { allDay: false, message: '', blockedTimes: [] as string[] };
 
-    // Full-day or clinic holiday
-    const fullLeave = matchingLeaves.find(l => l.full_day || l.specialist === 'clinic_holiday');
+    // Full-day leave or clinic holiday full-day → all slots blocked
+    const fullLeave = matchingLeaves.find(l =>
+      (l.full_day && l.specialist === 'clinic_holiday') ||
+      (l.full_day && l.specialist !== 'clinic_holiday')
+    );
     if (fullLeave) {
       return {
         allDay: true,
@@ -82,16 +93,15 @@ export default function Appointment() {
       };
     }
 
+    // Clinic holiday (half-day) → treat same as half-day leave but for ALL doctors
+    const clinicHalfLeave = matchingLeaves.find(l => l.specialist === 'clinic_holiday' && !l.full_day);
+    if (clinicHalfLeave) {
+      // Fall through to half-day logic below with clinic holiday record
+      matchingLeaves[0] = clinicHalfLeave;
+    }
+
     // Half-day — determine which time slots are blocked
     const hl = matchingLeaves[0];
-    const toMins = (s: string) => {
-      const [timePart, period] = s.trim().split(' ');
-      const [h, m = 0] = timePart.split(':').map(Number);
-      const pm = period?.toUpperCase() === 'PM' && h !== 12;
-      const am = period?.toUpperCase() === 'AM' && h === 12;
-      return (pm ? h + 12 : am ? 0 : h) * 60 + m;
-    };
-
     let fromMins: number;
     let toMins2: number;
     if (hl.time_from && hl.time_to) {
@@ -103,7 +113,9 @@ export default function Appointment() {
       fromMins = 13 * 60; toMins2 = 24 * 60;
     }
 
-    const allSlots = [...TIME_SLOTS.morning, ...TIME_SLOTS.afternoon, ...TIME_SLOTS.night];
+    // Use dynamic slots for that specific date
+    const slots = generateTimeSlots(date);
+    const allSlots = [...slots.morning, ...slots.evening, ...slots.sunday_afternoon];
     const blockedTimes = allSlots.filter(slot => {
       const sm = toMins(slot);
       return sm >= fromMins && sm < toMins2;
@@ -111,7 +123,7 @@ export default function Appointment() {
 
     const rangeStr = hl.time_from && hl.time_to
       ? `${hl.time_from} – ${hl.time_to}`
-      : hl.half_day_period === 'first_half' ? 'morning (before 1 PM)' : 'afternoon/evening (after 1 PM)';
+      : hl.half_day_period === 'first_half' ? 'morning (before 1 PM)' : 'evening (after 1 PM)';
 
     return {
       allDay: false,
@@ -305,35 +317,53 @@ export default function Appointment() {
                       <p className="text-xs text-red-600">{leaveBlocked.message}</p>
                     </div>
                   ) : (
-                    <div className="space-y-3">
-                      {[
-                        { label: 'Morning (9:00 AM – 11:30 AM)', slots: TIME_SLOTS.morning },
-                        { label: 'Afternoon / Evening (12:00 PM – 6:00 PM)', slots: TIME_SLOTS.afternoon },
-                        { label: 'Night (6:30 PM – 11:30 PM)', slots: TIME_SLOTS.night },
-                      ].map(({ label, slots }) => (
-                        <div key={label}>
-                          <p className="text-xs font-medium text-gray-400 mb-1.5">{label}</p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {slots.map(t => {
-                              const past    = isSlotPast(form.appointment_date, t);
-                              const onLeave = blockedSlots.includes(t);
-                              const disabled = past || onLeave;
-                              return (
-                                <button key={t} type="button" disabled={disabled}
-                                  onClick={() => !disabled && handleChange('appointment_time', t)}
-                                  title={onLeave ? 'Doctor unavailable at this time' : undefined}
-                                  className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                                    form.appointment_time === t ? 'bg-[#0F9FA8] text-white shadow-sm' :
-                                    onLeave ? 'bg-amber-50 text-amber-400 cursor-not-allowed line-through' :
-                                    past    ? 'bg-gray-100 text-gray-300 cursor-not-allowed' :
-                                    'bg-gray-100 text-gray-600 hover:bg-[#0F9FA8]/10 hover:text-[#0F9FA8]'
-                                  }`}>{t}</button>
-                              );
-                            })}
-                          </div>
+                    (() => {
+                      const slots = generateTimeSlots(form.appointment_date);
+                      const sun = isSunday(form.appointment_date);
+                      const groups = sun
+                        ? [
+                            { label: '10:00 AM – 1:00 PM (Morning)', slots: slots.morning },
+                            { label: '1:00 PM – 6:00 PM (Afternoon)', slots: slots.sunday_afternoon },
+                          ]
+                        : [
+                            { label: '10:00 AM – 1:00 PM (Morning)', slots: slots.morning },
+                            { label: '5:00 PM – 10:00 PM (Evening)', slots: slots.evening },
+                          ];
+                      return (
+                        <div className="space-y-3">
+                          {leaveBlocked.message && (
+                            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
+                              <p className="text-xs text-amber-700">{leaveBlocked.message}</p>
+                            </div>
+                          )}
+                          {groups.map(({ label, slots: groupSlots }) => (
+                            groupSlots.length > 0 && (
+                              <div key={label}>
+                                <p className="text-xs font-medium text-gray-400 mb-1.5">{label}</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {groupSlots.map(t => {
+                                    const past    = isSlotPast(form.appointment_date, t);
+                                    const onLeave = blockedSlots.includes(t);
+                                    const disabled = past || onLeave;
+                                    return (
+                                      <button key={t} type="button" disabled={disabled}
+                                        onClick={() => !disabled && handleChange('appointment_time', t)}
+                                        title={onLeave ? 'Doctor unavailable at this time' : undefined}
+                                        className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                                          form.appointment_time === t ? 'bg-[#0F9FA8] text-white shadow-sm' :
+                                          onLeave ? 'bg-amber-50 text-amber-400 cursor-not-allowed line-through' :
+                                          past    ? 'bg-gray-100 text-gray-300 cursor-not-allowed' :
+                                          'bg-gray-100 text-gray-600 hover:bg-[#0F9FA8]/10 hover:text-[#0F9FA8]'
+                                        }`}>{t}</button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      );
+                    })()
                   )}
                 </div>
               </div>

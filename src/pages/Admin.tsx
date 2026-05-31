@@ -681,6 +681,15 @@ export default function Admin() {
   const currentUserRole = user?.role || '';
   const allowedSpecialists = SPECIALIST_OPTIONS.filter(s => s.roles.includes(currentUserRole));
 
+  // Auto-select specialist for non-master-admin / non-CA users (doctors/physio select themselves)
+  useEffect(() => {
+    if (!leaveForm.specialist && currentUserRole &&
+        currentUserRole !== 'master_admin' && currentUserRole !== 'clinic_assistant') {
+      const selfOption = SPECIALIST_OPTIONS.find(s => s.value === currentUserRole);
+      if (selfOption) setLeaveForm(p => ({ ...p, specialist: selfOption.value }));
+    }
+  }, [currentUserRole]);
+
   // ── Leave functions ────────────────────────────────────────────────────────
   const loadLeaves = async () => {
     setLeavesLoading(true);
@@ -711,6 +720,7 @@ export default function Admin() {
   const saveLeave = async (force = false) => {
     if (!leaveForm.specialist) { toast.error('Please select a specialist'); return; }
     if (!leaveForm.start_date || !leaveForm.end_date) { toast.error('Start and end dates required'); return; }
+    if (leaveForm.start_date < today) { toast.error('Cannot apply leave for a past date'); return; }
     if (!force) {
       const conflicts = await checkLeaveConflicts();
       if (conflicts.length > 0) { setLeaveConflicts(conflicts); setShowLeaveWarning(true); return; }
@@ -1672,6 +1682,7 @@ export default function Admin() {
                       <div>
                         <label className="text-xs font-semibold text-gray-600 mb-1 block">Start Date *</label>
                         <input type="date" value={leaveForm.start_date}
+                          min={today}
                           onChange={e => setLeaveForm(p => ({ ...p, start_date: e.target.value, end_date: p.end_date || e.target.value }))}
                           className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30" />
                       </div>

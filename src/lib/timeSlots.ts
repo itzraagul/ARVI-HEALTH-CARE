@@ -1,34 +1,45 @@
-// Appointment slots: 9:00 AM to 11:30 PM in 30-min increments
-export function generateTimeSlots(): { morning: string[]; afternoon: string[]; night: string[] } {
-  const morning: string[] = [];
-  const afternoon: string[] = [];
-  const night: string[] = [];
+// ── Clinic Availability ────────────────────────────────────────────────────────
+// Mon–Sat : 10:00 AM – 1:00 PM  |  5:00 PM – 10:00 PM
+// Sunday  : 10:00 AM – 6:00 PM  (on appointment basis)
 
-  // Morning: 9:00 AM – 11:30 AM (h24: 9,10,11)
-  for (let h = 9; h <= 11; h++) {
-    for (const m of [0, 30]) {
-      morning.push(`${h}:${m === 0 ? '00' : '30'} AM`);
+export type SlotGroups = { morning: string[]; evening: string[]; sunday_afternoon: string[] };
+
+function buildSlots(
+  from_h24: number, from_m: number,
+  to_h24: number,   to_m: number
+): string[] {
+  const slots: string[] = [];
+  let h = from_h24, m = from_m;
+  while (h < to_h24 || (h === to_h24 && m <= to_m)) {
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    const ampm = h < 12 ? 'AM' : 'PM';
+    slots.push(`${h12}:${m === 0 ? '00' : '30'} ${ampm}`);
+    m += 30;
+    if (m >= 60) { m = 0; h++; }
+  }
+  return slots;
+}
+
+// Mon–Sat morning : 10:00 AM – 1:00 PM
+const MORNING_SLOTS = buildSlots(10, 0, 13, 0);
+
+// Mon–Sat evening : 5:00 PM – 10:00 PM
+const EVENING_SLOTS = buildSlots(17, 0, 22, 0);
+
+// Sunday : 10:00 AM – 6:00 PM (morning + afternoon merged)
+const SUNDAY_SLOTS = buildSlots(10, 0, 18, 0);
+
+export function generateTimeSlots(date?: string): SlotGroups {
+  if (date) {
+    // date = 'YYYY-MM-DD'
+    const day = new Date(date + 'T12:00:00').getDay(); // 0=Sun
+    if (day === 0) {
+      // Sunday — one block: morning to afternoon
+      return { morning: SUNDAY_SLOTS.slice(0, 7), evening: [], sunday_afternoon: SUNDAY_SLOTS.slice(7) };
     }
   }
-
-  // Afternoon: 12:00 PM – 6:00 PM (h24: 12–18)
-  for (let h24 = 12; h24 <= 18; h24++) {
-    for (const m of [0, 30]) {
-      const h12 = h24 === 12 ? 12 : h24 - 12;
-      afternoon.push(`${h12}:${m === 0 ? '00' : '30'} PM`);
-    }
-  }
-
-  // Night: 6:30 PM – 11:30 PM (h24: 18:30 – 23:30)
-  for (let h24 = 18; h24 <= 23; h24++) {
-    const mins = h24 === 18 ? [30] : [0, 30];
-    for (const m of mins) {
-      const h12 = h24 - 12;
-      night.push(`${h12}:${m === 0 ? '00' : '30'} PM`);
-    }
-  }
-
-  return { morning, afternoon, night };
+  // Mon–Sat (or no date provided)
+  return { morning: MORNING_SLOTS, evening: EVENING_SLOTS, sunday_afternoon: [] };
 }
 
 // Returns true if slot is in the past for today's date
@@ -36,7 +47,6 @@ export function isSlotPast(date: string, timeSlot: string): boolean {
   if (!date || !timeSlot) return false;
   const today = new Date().toISOString().split('T')[0];
   if (date !== today) return false;
-
   const parts = timeSlot.trim().split(' ');
   const ampm = parts[1];
   const [hStr, mStr] = parts[0].split(':');
@@ -44,8 +54,13 @@ export function isSlotPast(date: string, timeSlot: string): boolean {
   const m = parseInt(mStr);
   if (ampm === 'PM' && h !== 12) h += 12;
   if (ampm === 'AM' && h === 12) h = 0;
-
   const slotTime = new Date();
   slotTime.setHours(h, m, 0, 0);
   return slotTime <= new Date();
+}
+
+// Returns true if a given date is a Sunday
+export function isSunday(date: string): boolean {
+  if (!date) return false;
+  return new Date(date + 'T12:00:00').getDay() === 0;
 }

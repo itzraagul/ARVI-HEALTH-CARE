@@ -66,7 +66,7 @@ export default function Navbar() {
               <Phone size={12} /> +91 96770 80778
             </a>
             <span className="opacity-50">|</span>
-            <span>Mon–Sat: 10AM–10PM | Sun: 10AM–06PM</span>
+            <span>MON–SAT: 10AM–1PM | 5PM–10PM  |  SUN: 10AM–6PM</span>
           </div>
         </div>
       </div>
@@ -191,7 +191,6 @@ export default function Navbar() {
           </div>
         </div>
       )}
-      {/* Flash News Ticker — inside fixed header so it's always visible */}
       <FlashTicker />
     </header>
   );
