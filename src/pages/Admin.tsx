@@ -583,7 +583,7 @@ export default function Admin() {
   if (!user || !userRole) { navigate('/login'); return null; }
 
   const isMasterAdmin = authService.isMasterAdmin();
-  const today = new Date().toISOString().split("T")[0]; // used in leave date validation
+  const today = new Date().toISOString().split('T')[0];
   const isClinicAssistant = userRole === 'clinic_assistant';
   const canApprove = authService.canApproveAppointments();
 
@@ -722,6 +722,12 @@ export default function Admin() {
     if (!leaveForm.specialist) { toast.error('Please select a specialist'); return; }
     if (!leaveForm.start_date || !leaveForm.end_date) { toast.error('Start and end dates required'); return; }
     if (leaveForm.start_date < today) { toast.error('Cannot apply leave for a past date'); return; }
+    if (leaveForm.start_date === today && !leaveForm.full_day && leaveForm.time_from) {
+      const now = new Date();
+      const [h, m] = leaveForm.time_from.split(':').map(Number);
+      const leaveTime = new Date(); leaveTime.setHours(h, m, 0, 0);
+      if (leaveTime <= now) { toast.error('Cannot apply leave for a past time today. Please select a future time.'); return; }
+    }
     if (!force) {
       const conflicts = await checkLeaveConflicts();
       if (conflicts.length > 0) { setLeaveConflicts(conflicts); setShowLeaveWarning(true); return; }
