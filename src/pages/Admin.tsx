@@ -566,6 +566,7 @@ export default function Admin() {
   const [flashMsg, setFlashMsg] = useState('');
   const [flashSpeed, setFlashSpeed] = useState('normal');
   const [flashTheme, setFlashTheme] = useState('default');
+  const [flashFontSize, setFlashFontSize] = useState('normal');
   const [flashLoading, setFlashLoading] = useState(false);
 
   const [showUserModal, setShowUserModal] = useState(false);
@@ -761,6 +762,7 @@ export default function Admin() {
       if (data.message) setFlashMsg(data.message);
       setFlashSpeed(data.speed || 'normal');
       setFlashTheme(data.theme || 'default');
+      setFlashFontSize(data.font_size || 'normal');
     }
   };
 
@@ -774,6 +776,7 @@ export default function Admin() {
         is_active: active,
         speed: flashSpeed,
         theme: flashTheme,
+        font_size: flashFontSize,
         updated_at: now,
       };
       if (active) payload.started_at = now;
@@ -1863,7 +1866,7 @@ ARVI Ortho & Child Care`;
                     className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30 resize-none" />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
                   <div>
                     <label className="text-xs font-semibold text-gray-600 mb-1 block">Scroll Speed</label>
                     <select value={flashSpeed} onChange={e=>setFlashSpeed(e.target.value)}
@@ -1881,6 +1884,15 @@ ARVI Ortho & Child Care`;
                       <option value="emergency">Emergency (Red)</option>
                       <option value="info">Info (Teal)</option>
                       <option value="success">Success (Green)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Font Size</label>
+                    <select value={flashFontSize} onChange={e=>setFlashFontSize(e.target.value)}
+                      className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F9FA8]/30">
+                      <option value="normal">Normal (14px)</option>
+                      <option value="medium">Medium (16px)</option>
+                      <option value="large">Large (18px)</option>
                     </select>
                   </div>
                 </div>

@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, useLocation, Navigate } from 'react-router-dom';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import Home from './pages/Home';
@@ -25,10 +25,24 @@ function ScrollToTop() {
 }
 
 function Layout({ children }: { children: React.ReactNode }) {
+  const [tickerHeight, setTickerHeight] = useState(0);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const h = (e as CustomEvent<{ height: number }>).detail.height;
+      setTickerHeight(h);
+    };
+    window.addEventListener('ticker-resize', handler);
+    return () => window.removeEventListener('ticker-resize', handler);
+  }, []);
+
   return (
     <>
       <Navbar />
-      <main>{children}</main>
+      {/* Dynamic top padding: navbar height + ticker height when active */}
+      <main style={{ paddingTop: tickerHeight > 0 ? `calc(var(--navbar-height, 108px) + ${tickerHeight}px)` : 'var(--navbar-height, 108px)' }}>
+        {children}
+      </main>
       <Footer />
     </>
   );
@@ -43,29 +57,26 @@ function AppRoutes() {
   return (
     <>
       <ScrollToTop />
-
       <Routes>
-        {/* Public Pages */}
-        <Route path="/" element={<Layout><Home /></Layout>} />
-        <Route path="/about" element={<Layout><About /></Layout>} />
-        <Route path="/orthopaedic" element={<Layout><Orthopaedic /></Layout>} />
-        <Route path="/child-care" element={<Layout><ChildCare /></Layout>} />
-        <Route path="/doctors" element={<Layout><Doctors /></Layout>} />
-        <Route path="/gallery" element={<Layout><Gallery /></Layout>} />
-        <Route path="/blog" element={<Layout><Blog /></Layout>} />
-        <Route path="/contact" element={<Layout><Contact /></Layout>} />
-        <Route path="/ask-us" element={<Layout><AskUs /></Layout>} />
-        <Route path="/appointment" element={<Layout><Appointment /></Layout>} />
+        <Route path="/"              element={<Layout><Home /></Layout>} />
+        <Route path="/about"         element={<Layout><About /></Layout>} />
+        <Route path="/orthopaedic"   element={<Layout><Orthopaedic /></Layout>} />
+        <Route path="/child-care"    element={<Layout><ChildCare /></Layout>} />
+        <Route path="/doctors"       element={<Layout><Doctors /></Layout>} />
+        <Route path="/gallery"       element={<Layout><Gallery /></Layout>} />
+        <Route path="/blog"          element={<Layout><Blog /></Layout>} />
+        <Route path="/contact"       element={<Layout><Contact /></Layout>} />
+        <Route path="/ask-us"        element={<Layout><AskUs /></Layout>} />
+        <Route path="/appointment"   element={<Layout><Appointment /></Layout>} />
         <Route path="/privacy-policy" element={<Layout><PrivacyPolicy /></Layout>} />
-        <Route path="/terms" element={<Layout><Terms /></Layout>} />
-
-        {/* Login/Admin */}
-        <Route path="/login" element={<Login />} />
-<Route path="/admin" element={<ProtectedAdminRoute />} />
+        <Route path="/terms"         element={<Layout><Terms /></Layout>} />
+        <Route path="/login"         element={<Login />} />
+        <Route path="/admin"         element={<ProtectedAdminRoute />} />
       </Routes>
     </>
   );
 }
+
 export default function App() {
   return (
     <BrowserRouter>

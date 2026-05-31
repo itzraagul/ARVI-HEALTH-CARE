@@ -1,28 +1,43 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Megaphone, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
-type FlashNews = { id: string; message: string; is_active: boolean; speed: string; theme: string; };
+type FlashNews = {
+  id: string; message: string; is_active: boolean;
+  speed: string; theme: string; font_size: string;
+};
 
 const themeStyles: Record<string, string> = {
-  default:   'bg-[#0A3D62] text-white border-[#0F9FA8]',
-  emergency: 'bg-red-600 text-white border-red-400',
-  info:      'bg-[#0F9FA8] text-white border-teal-300',
-  success:   'bg-green-600 text-white border-green-400',
+  default:   'bg-[#0A3D62] text-white',
+  emergency: 'bg-red-600 text-white',
+  info:      'bg-[#0F9FA8] text-white',
+  success:   'bg-green-600 text-white',
 };
 
 const speedDuration: Record<string, string> = {
   slow: '40s', normal: '25s', fast: '12s',
 };
 
+const fontSizeClass: Record<string, string> = {
+  normal: 'text-sm',
+  medium: 'text-base',
+  large:  'text-lg',
+};
+
 export default function FlashTicker() {
   const [news, setNews] = useState<FlashNews | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [tickerKey, setTickerKey] = useState(0);
+  const tickerRef = useRef<HTMLDivElement>(null);
+
+  // Notify App.tsx about ticker visibility so it can adjust page top padding
+  const notifyHeight = (visible: boolean, el?: HTMLDivElement | null) => {
+    const h = visible && el ? el.offsetHeight : 0;
+    window.dispatchEvent(new CustomEvent('ticker-resize', { detail: { height: h } }));
+  };
 
   const loadNews = async () => {
     try {
-      // Use maybeSingle() — never throws when 0 rows found
       const { data, error } = await supabase
         .from('flash_news')
         .select('*')
@@ -30,12 +45,9 @@ export default function FlashTicker() {
         .order('updated_at', { ascending: false })
         .limit(1)
         .maybeSingle();
-
-      if (error) { console.warn('FlashTicker fetch error:', error.message); return; }
-
+      if (error) { console.warn('FlashTicker:', error.message); return; }
       if (data && data.message?.trim()) {
         setNews(prev => {
-          // If content changed, reset dismissed and restart animation
           if (!prev || prev.id !== data.id || prev.message !== data.message || !prev.is_active) {
             setDismissed(false);
             setTickerKey(k => k + 1);
@@ -44,72 +56,75 @@ export default function FlashTicker() {
         });
       } else {
         setNews(null);
+        notifyHeight(false);
       }
-    } catch (e) {
-      console.warn('FlashTicker error:', e);
-    }
+    } catch (e) { console.warn('FlashTicker error:', e); }
   };
 
   useEffect(() => {
     loadNews();
-
-    // Real-time subscription — updates instantly when admin broadcasts
     const channel = supabase
-      .channel('flash_news_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'flash_news' }, () => {
-        loadNews();
-      })
+      .channel('flash_ticker_live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'flash_news' }, loadNews)
       .subscribe();
-
-    // Fallback poll every 15 seconds
     const interval = setInterval(loadNews, 15000);
-
-    return () => {
-      supabase.removeChannel(channel);
-      clearInterval(interval);
-    };
+    return () => { supabase.removeChannel(channel); clearInterval(interval); };
   }, []);
+
+  // When visibility changes, notify App.tsx with our height
+  useEffect(() => {
+    const visible = !!(news && news.is_active && news.message?.trim() && !dismissed);
+    if (visible) {
+      // Small delay to let DOM settle
+      setTimeout(() => notifyHeight(true, tickerRef.current), 50);
+    } else {
+      notifyHeight(false);
+    }
+  }, [news, dismissed]);
 
   if (!news || !news.is_active || !news.message.trim() || dismissed) return null;
 
-  const theme = themeStyles[news.theme] || themeStyles.default;
-  const duration = speedDuration[news.speed] || speedDuration.normal;
+  const theme    = themeStyles[news.theme]     || themeStyles.default;
+  const duration = speedDuration[news.speed]   || speedDuration.normal;
+  const fontSize = fontSizeClass[news.font_size] || fontSizeClass.normal;
 
   return (
-    <div key={tickerKey} className={`w-full border-b-2 ${theme} flex items-center overflow-hidden`} style={{ minHeight: '36px' }}>
+    <div ref={tickerRef} key={tickerKey}
+      className={`w-full flex items-center overflow-hidden border-b border-white/20 ${theme}`}
+      style={{ minHeight: '36px' }}>
       <style>{`
-        @keyframes arvi-ticker {
+        @keyframes arvi-scroll {
           0%   { transform: translateX(100vw); }
           100% { transform: translateX(-100%); }
         }
-        .arvi-ticker-text {
+        .arvi-scroll {
           display: inline-block;
           white-space: nowrap;
-          animation: arvi-ticker ${duration} linear infinite;
+          animation: arvi-scroll ${duration} linear infinite;
           padding-right: 80px;
         }
-        .arvi-ticker-text:hover { animation-play-state: paused; }
+        .arvi-scroll:hover { animation-play-state: paused; }
       `}</style>
 
       {/* Label */}
-      <div className="flex items-center gap-1.5 px-3 py-1.5 flex-shrink-0 border-r border-white/20 z-10"
-        style={{ background: 'rgba(0,0,0,0.15)' }}>
-        <Megaphone size={14} />
+      <div className="flex items-center gap-1.5 px-3 py-1.5 flex-shrink-0 border-r border-white/20"
+        style={{ background: 'rgba(0,0,0,0.15)', minWidth: 'fit-content' }}>
+        <Megaphone size={13} />
         <span className="text-xs font-bold uppercase tracking-wide whitespace-nowrap">Flash News</span>
       </div>
 
       {/* Scrolling message */}
-      <div className="flex-1 overflow-hidden relative">
-        <span className="arvi-ticker-text text-sm font-medium py-1.5">
+      <div className="flex-1 overflow-hidden">
+        <span className={`arvi-scroll font-medium py-1.5 ${fontSize}`}>
           {news.message}
         </span>
       </div>
 
       {/* Dismiss */}
       <button onClick={() => setDismissed(true)}
-        className="flex-shrink-0 p-1.5 hover:bg-white/20 transition-colors mx-1 rounded"
-        aria-label="Dismiss">
-        <X size={14} />
+        className="flex-shrink-0 p-1.5 hover:bg-white/20 rounded transition-colors mx-1"
+        aria-label="Dismiss flash news">
+        <X size={13} />
       </button>
     </div>
   );

@@ -4,6 +4,12 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* Navbar height: top-bar(28px) + nav-row(80px) = 108px */
+  /* Pages use this to offset their top padding correctly */
+  --navbar-height: 108px;
+}
+
 @layer base {
   * {
     scroll-behavior: smooth;
