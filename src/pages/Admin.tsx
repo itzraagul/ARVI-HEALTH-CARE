@@ -583,6 +583,7 @@ export default function Admin() {
   if (!user || !userRole) { navigate('/login'); return null; }
 
   const isMasterAdmin = authService.isMasterAdmin();
+  const today = new Date().toISOString().split("T")[0]; // used in leave date validation
   const isClinicAssistant = userRole === 'clinic_assistant';
   const canApprove = authService.canApproveAppointments();
 

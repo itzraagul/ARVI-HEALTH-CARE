@@ -78,11 +78,8 @@ export default function Appointment() {
     });
     if (!matchingLeaves.length) return { allDay: false, message: '', blockedTimes: [] as string[] };
 
-    // Full-day leave or clinic holiday full-day → all slots blocked
-    const fullLeave = matchingLeaves.find(l =>
-      (l.full_day && l.specialist === 'clinic_holiday') ||
-      (l.full_day && l.specialist !== 'clinic_holiday')
-    );
+    // Full-day leave (any specialist including clinic_holiday) → all slots blocked
+    const fullLeave = matchingLeaves.find(l => l.full_day === true);
     if (fullLeave) {
       return {
         allDay: true,
@@ -93,27 +90,25 @@ export default function Appointment() {
       };
     }
 
-    // Clinic holiday (half-day) → treat same as half-day leave but for ALL doctors
-    const clinicHalfLeave = matchingLeaves.find(l => l.specialist === 'clinic_holiday' && !l.full_day);
-    if (clinicHalfLeave) {
-      // Fall through to half-day logic below with clinic holiday record
-      matchingLeaves[0] = clinicHalfLeave;
-    }
+    // Half-day leave (doctor-specific OR clinic_holiday)
+    // Use clinic_holiday record first if present, otherwise the doctor's own leave
+    const hl = matchingLeaves.find(l => l.specialist === 'clinic_holiday') || matchingLeaves[0];
 
-    // Half-day — determine which time slots are blocked
-    const hl = matchingLeaves[0];
     let fromMins: number;
     let toMins2: number;
     if (hl.time_from && hl.time_to) {
+      // Specific time range provided
       fromMins = toMins(hl.time_from);
       toMins2  = toMins(hl.time_to);
     } else if (hl.half_day_period === 'first_half') {
-      fromMins = 0; toMins2 = 13 * 60;
+      fromMins = 0;        // covers all morning slots from 10 AM
+      toMins2  = 13 * 60 + 1; // 1:01 PM — ensures 1:00 PM slot IS blocked
     } else {
-      fromMins = 13 * 60; toMins2 = 24 * 60;
+      fromMins = 13 * 60; // 1:00 PM onwards
+      toMins2  = 24 * 60;
     }
 
-    // Use dynamic slots for that specific date
+    // Compute which available clinic slots fall in the blocked range
     const slots = generateTimeSlots(date);
     const allSlots = [...slots.morning, ...slots.evening, ...slots.sunday_afternoon];
     const blockedTimes = allSlots.filter(slot => {
@@ -121,14 +116,17 @@ export default function Appointment() {
       return sm >= fromMins && sm < toMins2;
     });
 
+    const isClinicHoliday = hl.specialist === 'clinic_holiday';
     const rangeStr = hl.time_from && hl.time_to
       ? `${hl.time_from} – ${hl.time_to}`
-      : hl.half_day_period === 'first_half' ? 'morning (before 1 PM)' : 'evening (after 1 PM)';
+      : hl.half_day_period === 'first_half' ? 'morning (10 AM – 1 PM)' : 'evening (5 PM – 10 PM)';
 
     return {
       allDay: false,
       blockedTimes,
-      message: `${docInfo.label} is unavailable ${rangeStr} on this date. Please select a different time.`,
+      message: isClinicHoliday
+        ? `${CLINIC_NAME} is partially closed — unavailable ${rangeStr} on this date.`
+        : `${docInfo.label} is unavailable ${rangeStr} on this date. Please select a different time.`,
     };
   };
 
