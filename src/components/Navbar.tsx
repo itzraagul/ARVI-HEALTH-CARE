@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Menu, X, Phone, ChevronDown } from 'lucide-react';
+import FlashTicker from './FlashTicker';
 
 const navLinks = [
   { label: 'Home', href: '/' },
@@ -190,6 +191,8 @@ export default function Navbar() {
           </div>
         </div>
       )}
+      {/* Flash News Ticker — inside fixed header so it's always visible */}
+      <FlashTicker />
     </header>
   );
 }
