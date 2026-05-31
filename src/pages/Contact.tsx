@@ -58,7 +58,7 @@ export default function Contact() {
                 {
                   icon: Clock,
                   title: 'Timings',
-                  content: 'Mon – Sat: 10:00 AM – 1:00 PM | 5:00 PM – 10:00 PM\nSunday: 10:00 AM – 6:00 PM (On Appointment)',
+                  content: 'Mon – Sat: 10:00 AM – 1:00 PM | 5:00 PM – 10:00 PM\nSunday: 10:00 AM – 6:00 PM (Only on appointment basis)',
                   color: 'bg-[#0F9FA8]',
                 },
               ].map(({ icon: Icon, title, content, color }) => (
