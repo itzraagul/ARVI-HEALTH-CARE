@@ -67,9 +67,10 @@ const CLINIC_PHONE = '+91 96770 80778';
 const MEDIA_CATEGORIES = ['Clinic', 'Doctors', 'Promotions', 'Google Images', 'Videos'];
 
 // ─── WhatsApp: emoji-safe encoding ───────────────────────────────────────────
-function buildWaMessage(apt: Appointment): string {
+function buildWaMessage(apt: Appointment, extraLabels?: Record<string,string>): string {
   const dateStr = fmtDate(apt.appointment_date);
-  const doctorName = doctorLabels[apt.doctor] || apt.doctor;
+  const allLabels = { ...doctorLabels, ...(extraLabels || {}) };
+  const doctorName = allLabels[apt.doctor] || apt.doctor;
   // Unicode escape sequences: survive all build tools and file encodings
   const E_TICK  = '\u2705';
   const E_CAL   = '\uD83D\uDCC5';
@@ -102,8 +103,8 @@ function cleanPhone(raw: string): string {
 }
 
 // ─── WhatsApp message builder ───────────────────────────────────────────────
-async function sendWhatsAppMessage(apt: Appointment): Promise<{ success: boolean; error?: string }> {
-  const message = buildWaMessage(apt);
+async function sendWhatsAppMessage(apt: Appointment, extraLabels?: Record<string,string>): Promise<{ success: boolean; error?: string }> {
+  const message = buildWaMessage(apt, extraLabels);
 
   const phone = cleanPhone(apt.patient_phone);
   if (!phone || phone.length < 10) {
@@ -877,11 +878,21 @@ export default function Admin() {
       })),
     { value: 'clinic_holiday', label: 'Arvi Clinic Holiday (All)', roles: ['master_admin','clinic_assistant'] },
   ];
+  // Build SPECIALIST_DOCTOR_MAP dynamically to include new doctor/technician users
+  const dynamicDocKeys = adminUsers
+    .filter(u => (u.role === 'doctor' || u.role === 'technician') && u.doctor_key)
+    .map(u => u.doctor_key as string);
   const SPECIALIST_DOCTOR_MAP: Record<string,string[]> = {
     'doctor_aravind':  ['dr-aravindasamy'],
     'doctor_vishali':  ['dr-vishali'],
     'physiotherapist': ['physiotherapist'],
-    'clinic_holiday':  ['dr-aravindasamy','dr-vishali','physiotherapist'],
+    // Dynamic doctor/technician users map by username -> doctor_key
+    ...Object.fromEntries(
+      adminUsers
+        .filter(u => (u.role === 'doctor' || u.role === 'technician') && u.doctor_key)
+        .map(u => [u.username, [u.doctor_key as string]])
+    ),
+    'clinic_holiday':  ['dr-aravindasamy','dr-vishali','physiotherapist', ...dynamicDocKeys],
   };
   const currentUserRole = user?.role || '';
   // Merge static + dynamic doctor labels for appointment display
@@ -1146,7 +1157,7 @@ export default function Admin() {
     if (waEnabled) {
       const apt = appointments.find(a => a.id === id);
       if (apt && !apt.whatsapp_sent) {
-        const result = await sendWhatsAppMessage({ ...apt, status: 'approved' });
+        const result = await sendWhatsAppMessage({ ...apt, status: 'approved' }, dynamicDoctorLabels);
         if (result.success) {
           setAppointments(prev => prev.map(a => a.id === id ? { ...a, whatsapp_sent: true } : a));
         }
@@ -1180,7 +1191,7 @@ export default function Admin() {
   };
 
   const resendWa = async (apt: Appointment) => {
-    const result = await sendWhatsAppMessage(apt);
+    const result = await sendWhatsAppMessage(apt, dynamicDoctorLabels);
     if (result.success) toast.success('WhatsApp opened');
     else toast.error(result.error || 'Failed');
   };
@@ -1270,7 +1281,7 @@ export default function Admin() {
   const filteredApts = appointments.filter(a => {
     const s = searchTerm.toLowerCase();
     return (!s || a.patient_name?.toLowerCase().includes(s) || a.patient_phone?.includes(s)
-      || (doctorLabels[a.doctor] || '').toLowerCase().includes(s))
+      || (dynamicDoctorLabels[a.doctor] || '').toLowerCase().includes(s))
       && (!statusFilter || a.status === statusFilter);
   });
 
@@ -1417,7 +1428,7 @@ export default function Admin() {
                       {appointments.slice(0, 5).map(apt => (
                         <tr key={apt.id} className="border-t border-gray-100 hover:bg-gray-50">
                           <td className="px-6 py-4"><p className="font-semibold text-[#0A3D62]">{apt.patient_name}</p><p className="text-gray-500 text-xs">{apt.patient_phone}</p></td>
-                          <td className="px-6 py-4 text-gray-700">{doctorLabels[apt.doctor] || apt.doctor}</td>
+                          <td className="px-6 py-4 text-gray-700">{dynamicDoctorLabels[apt.doctor] || apt.doctor}</td>
                           <td className="px-6 py-4 text-gray-700">{fmtDate(apt.appointment_date)} {apt.appointment_time}</td>
                           <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusColor[apt.status] || 'bg-gray-100 text-gray-600'}`}>{apt.status}</span></td>
                           <td className="px-6 py-4">{apt.whatsapp_sent ? <span className="text-xs text-[#25D366] font-semibold">✓</span> : <span className="text-gray-300 text-xs">–</span>}</td>
@@ -1474,7 +1485,7 @@ export default function Admin() {
                       </div>
                     </div>
                     <div className="grid md:grid-cols-3 gap-4 mb-4 p-4 bg-gray-50 rounded-xl">
-                      <div><p className="text-xs text-gray-500 font-semibold uppercase mb-1">Doctor</p><p className="text-sm font-semibold text-[#0A3D62]">{doctorLabels[apt.doctor] || apt.doctor}</p></div>
+                      <div><p className="text-xs text-gray-500 font-semibold uppercase mb-1">Doctor</p><p className="text-sm font-semibold text-[#0A3D62]">{dynamicDoctorLabels[apt.doctor] || apt.doctor}</p></div>
                       <div><p className="text-xs text-gray-500 font-semibold uppercase mb-1">Date & Time</p><p className="text-sm font-semibold text-[#0A3D62]">{fmtDate(apt.appointment_date)} — {apt.appointment_time}</p></div>
                       <div><p className="text-xs text-gray-500 font-semibold uppercase mb-1">Reason</p><p className="text-sm font-semibold text-[#0A3D62]">{apt.reason || 'General Consultation'}</p></div>
                     </div>
@@ -1754,10 +1765,12 @@ export default function Admin() {
                         <td className="px-6 py-4"><span className="px-3 py-1 bg-[#0F9FA8]/10 text-[#0A3D62] rounded-full text-xs font-medium">{roleLabels[u.role] || u.role}</span></td>
                         <td className="px-6 py-4 text-xs text-gray-500">
                           {u.role === 'master_admin' && 'Full Access'}
-                          {u.role === 'doctor_aravind' && 'Aravind + Physio'}
-                          {u.role === 'doctor_vishali' && 'Vishali + Physio'}
+                          {u.role === 'doctor_aravind' && 'Aravind Apts + Leave'}
+                          {u.role === 'doctor_vishali' && 'Vishali Apts + Leave'}
                           {u.role === 'clinic_assistant' && 'Read-only all Apts'}
-                          {u.role === 'physiotherapist' && 'Physio only'}
+                          {u.role === 'physiotherapist' && 'Physio Apts + Leave'}
+                          {u.role === 'doctor' && 'Own Apts + Leave'}
+                          {u.role === 'technician' && 'Own Apts + Leave'}
                         </td>
                         <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-xs font-semibold ${u.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>{u.is_active ? 'Active' : 'Inactive'}</span></td>
                         <td className="px-6 py-4">
@@ -2084,7 +2097,7 @@ export default function Admin() {
                     <div className="bg-gray-50 rounded-xl p-3 mb-5 text-sm space-y-1">
                       <p><span className="font-semibold text-gray-600">Patient:</span> {approvalLeaveWarning.apt.patient_name}</p>
                       <p><span className="font-semibold text-gray-600">Date:</span> {fmtDate(approvalLeaveWarning.apt.appointment_date)} at {approvalLeaveWarning.apt.appointment_time}</p>
-                      <p><span className="font-semibold text-gray-600">Doctor:</span> {doctorLabels[approvalLeaveWarning.apt.doctor] || approvalLeaveWarning.apt.doctor}</p>
+                      <p><span className="font-semibold text-gray-600">Doctor:</span> {dynamicDoctorLabels[approvalLeaveWarning.apt.doctor] || approvalLeaveWarning.apt.doctor}</p>
                     </div>
 
                     <p className="text-sm text-gray-600 mb-5">
