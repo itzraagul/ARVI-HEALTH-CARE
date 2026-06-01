@@ -3,7 +3,8 @@ import { supabase } from './supabase';
 export interface AdminUser {
   id: string;
   username: string;
-  role: 'master_admin' | 'doctor_aravind' | 'doctor_vishali' | 'clinic_assistant' | 'physiotherapist';
+  role: string; // master_admin | doctor_aravind | doctor_vishali | clinic_assistant | physiotherapist | doctor | technician
+  doctor_key?: string; // for dynamic doctor/technician users
   full_name: string;
   email: string;
   is_active: boolean;
@@ -126,22 +127,42 @@ export const authService = {
 
   canApproveAppointments(): boolean {
     const role = this.getUserRole();
-    return role === 'master_admin'
-      || role === 'doctor_aravind'
-      || role === 'doctor_vishali'
-      || role === 'physiotherapist';
-    // clinic_assistant = read-only, cannot approve
+    if (!role) return false;
+    if (role === 'clinic_assistant') return false; // read-only
+    return true; // all other roles (master_admin, doctors, technicians) can approve
   },
 
-  getFilteredDoctors(): string[] {
-    const role = this.getUserRole();
+  getFilteredDoctors(): string[] | 'all' | 'own' {
+    const user = this.getCurrentUser();
+    const role = user?.role;
     switch (role) {
-      case 'doctor_aravind':    return ['dr-aravindasamy', 'physiotherapist'];
-      case 'doctor_vishali':    return ['dr-vishali', 'physiotherapist'];
-      case 'physiotherapist':   return ['physiotherapist'];
-      case 'clinic_assistant':  return []; // sees all, read-only
-      case 'master_admin':      return []; // sees all
-      default:                  return [];
+      // Master Admin: sees ALL appointments
+      case 'master_admin':
+        return [];  // empty = no filter = sees all
+
+      // Aravind: sees his own + physiotherapist + ALL new doctor/technician users
+      case 'doctor_aravind':
+        return 'all_except_vishali';  // special flag handled in Admin.tsx
+
+      // Vishali: sees only her own appointments
+      case 'doctor_vishali':
+        return ['dr-vishali'];
+
+      // Physiotherapist: sees only own appointments
+      case 'physiotherapist':
+        return ['physiotherapist'];
+
+      // Clinic Assistant: sees all, read-only
+      case 'clinic_assistant':
+        return [];
+
+      // New dynamic doctor: sees only their own doctor_key
+      case 'doctor':
+      case 'technician':
+        return user?.doctor_key ? [user.doctor_key] : 'own';
+
+      default:
+        return [];
     }
   },
 

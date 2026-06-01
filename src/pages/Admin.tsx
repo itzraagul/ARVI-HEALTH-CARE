@@ -1063,17 +1063,34 @@ export default function Admin() {
       ]);
       let apts = aptRes.data || [];
       const filter = authService.getFilteredDoctors();
-      if (filter.length > 0) apts = apts.filter((a: Appointment) => filter.includes(a.doctor));
+      const currentRole = user?.role || '';
+
+      if (filter === 'all_except_vishali') {
+        // Dr. Aravind sees: his own + physio + ALL new doctor/technician users (everyone except Vishali)
+        apts = apts.filter((a: Appointment) => a.doctor !== 'dr-vishali');
+      } else if (filter === 'own') {
+        // Dynamic doctor with no doctor_key set — show nothing for safety
+        apts = [];
+      } else if (Array.isArray(filter) && filter.length > 0) {
+        apts = apts.filter((a: Appointment) => filter.includes(a.doctor));
+      }
+      // filter === [] means see all (master_admin, clinic_assistant)
+
       setAppointments(apts);
       setMessages(msgRes.data || []);
 
+      // Load admin users for ALL roles (needed for dynamic doctor labels, specialist options)
+      const isAdminOrCA = currentRole === 'master_admin' || currentRole === 'clinic_assistant' || currentRole === 'doctor_aravind';
+      const [usersRes] = await Promise.all([
+        supabase.from('admin_users').select('id,username,role,full_name,email,is_active,specialization,specialties,profile_picture,doctor_key,badge_label,show_in_doctors').order('created_at', { ascending: true }),
+      ]);
+      setAdminUsers(usersRes.data || []);
+
       if (isMasterAdmin) {
-        const [usersRes, waRes, cfgRes] = await Promise.all([
-          supabase.from('admin_users').select('id,username,role,full_name,email,is_active,specialization,specialties,profile_picture,doctor_key,badge_label,show_in_doctors').order('created_at', { ascending: true }),
+        const [waRes, cfgRes] = await Promise.all([
           supabase.from('whatsapp_logs').select('*').order('created_at', { ascending: false }).limit(100),
           supabase.from('admin_settings').select('*').eq('key', 'whatsapp_enabled').maybeSingle(),
         ]);
-        setAdminUsers(usersRes.data || []);
         setWaLogs(waRes.data || []);
         if (cfgRes.data) setWaEnabled(cfgRes.data.value === 'true');
       }

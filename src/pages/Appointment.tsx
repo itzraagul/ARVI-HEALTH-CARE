@@ -125,6 +125,7 @@ export default function Appointment() {
     }
 
     // Compute which available clinic slots fall in the blocked range
+    if (!date) return { allDay: false, blockedTimes: [] as string[], message: '' };
     const slots = generateTimeSlots(date);
     const allSlots = [...slots.morning, ...slots.evening, ...slots.sunday_afternoon];
     const blockedTimes = allSlots.filter(slot => {
@@ -332,6 +333,7 @@ export default function Appointment() {
                     </div>
                   ) : (
                     (() => {
+                      if (!form.appointment_date) return <p className="text-xs text-gray-400">Select a date first to see available slots.</p>;
                       const slots = generateTimeSlots(form.appointment_date);
                       const sun = isSunday(form.appointment_date);
                       const groups = sun
