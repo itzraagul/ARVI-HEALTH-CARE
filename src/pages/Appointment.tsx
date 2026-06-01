@@ -4,11 +4,8 @@ import { supabase } from '../lib/supabase';
 import { generateTimeSlots, isSlotPast, isSunday } from '../lib/timeSlots';
 import { toast } from '../lib/toast';
 
-const DOCTORS = [
-  { value: 'dr-aravindasamy', label: 'Dr. Aravindasamy M', spec: 'MS Orthopaedics', dept: 'Orthopaedic Care', specialist: 'doctor_aravind' },
-  { value: 'dr-vishali',      label: 'Dr. Vishali G',      spec: 'MD Paediatrics',  dept: 'Child Care',       specialist: 'doctor_vishali' },
-  { value: 'physiotherapist', label: 'Physiotherapist Expert', spec: 'BPT',        dept: 'Physiotherapy Services', specialist: 'physiotherapist' },
-];
+// DOCTORS is now fetched dynamically from DB inside the component
+type DoctorOption = { value: string; label: string; spec: string; dept: string; specialist: string; };
 
 // TIME_SLOTS are generated dynamically per selected date in the component
 const CLINIC_NAME = 'ARVI Ortho & Child Care';
@@ -33,20 +30,39 @@ export default function Appointment() {
   });
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+  const [doctors, setDoctors] = useState<DoctorOption[]>([]);
   const [leaves, setLeaves] = useState<LeaveRecord[]>([]);
   const [leaveBlocked, setLeaveBlocked] = useState<{ blocked: boolean; message: string }>({ blocked: false, message: '' });
   const today = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
-    const fetchLeaves = async () => {
-      const { data, error } = await supabase
+    const fetchData = async () => {
+      // Fetch active doctors/technicians from DB
+      const { data: dbDoctors } = await supabase
+        .from('admin_users')
+        .select('full_name, role, username, specialization, doctor_key')
+        .in('role', ['doctor_aravind','doctor_vishali','physiotherapist','doctor','technician'])
+        .eq('is_active', true)
+        .order('created_at', { ascending: true });
+
+      const doctorList: DoctorOption[] = (dbDoctors || []).map(d => ({
+        value:      d.doctor_key || d.username,
+        label:      d.full_name,
+        spec:       d.specialization || '',
+        dept:       d.role === 'doctor' || d.role === 'doctor_aravind' || d.role === 'doctor_vishali' ? 'Medical Consultation' : 'Specialist Services',
+        specialist: d.role,
+      }));
+      setDoctors(doctorList);
+
+      // Fetch active leaves
+      const { data: leaveData, error } = await supabase
         .from('leave_management')
         .select('*')
         .eq('status', 'active')
         .gte('end_date', today);
-      if (!error) setLeaves(data || []);
+      if (!error) setLeaves(leaveData || []);
     };
-    fetchLeaves();
+    fetchData();
   }, []);
 
   // Re-check whenever doctor or date changes

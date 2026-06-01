@@ -33,6 +33,8 @@ type MediaItem = {
 };
 type AdminUserRow = {
   id: string; username: string; role: string; full_name: string; email: string; is_active: boolean;
+  specialization?: string; specialties?: string[]; profile_picture?: string;
+  doctor_key?: string; badge_label?: string; show_in_doctors?: boolean;
 };
 type WaLog = {
   id: string; patient_name: string; patient_phone: string;
@@ -194,12 +196,71 @@ function ChangePasswordModal({ userId, targetName, onClose }: { userId: string; 
 }
 
 // ─── User Modal ───────────────────────────────────────────────────────────────
+// ─── Role type definitions ───────────────────────────────────────────────────
+const ROLE_TYPES = [
+  {
+    value: 'master_admin',
+    label: 'Admin User',
+    description: 'Full access — same as Master Admin',
+    icon: '🛡️',
+    color: 'border-[#0A3D62] bg-[#0A3D62]/5',
+    showInDoctors: false,
+    doctorKeyPrefix: null,
+  },
+  {
+    value: 'doctor',
+    label: 'Doctor',
+    description: 'Visible on Doctors page. Patients can book appointments.',
+    icon: '👨‍⚕️',
+    color: 'border-[#0F9FA8] bg-[#0F9FA8]/5',
+    showInDoctors: true,
+    doctorKeyPrefix: 'dr-',
+  },
+  {
+    value: 'technician',
+    label: 'Technician / Expert',
+    description: 'Visible on Doctors page. Patients can book appointments.',
+    icon: '🩺',
+    color: 'border-[#FF8C42] bg-[#FF8C42]/5',
+    showInDoctors: true,
+    doctorKeyPrefix: '',
+  },
+  {
+    value: 'clinic_assistant',
+    label: 'CA User',
+    description: 'Read-only access to appointments and messages.',
+    icon: '📋',
+    color: 'border-[#3CB371] bg-[#3CB371]/5',
+    showInDoctors: false,
+    doctorKeyPrefix: null,
+  },
+] as const;
+
 function UserModal({ user, onClose, onSave }: { user?: AdminUserRow | null; onClose: () => void; onSave: () => void }) {
+  const [roleType, setRoleType] = useState<string>(
+    user ? (
+      user.role === 'master_admin' ? 'master_admin' :
+      user.role === 'clinic_assistant' ? 'clinic_assistant' :
+      user.role === 'doctor' ? 'doctor' :
+      user.role === 'technician' ? 'technician' :
+      // Existing doctor/physio roles
+      ['doctor_aravind','doctor_vishali'].includes(user.role) ? 'doctor' :
+      user.role === 'physiotherapist' ? 'technician' : 'clinic_assistant'
+    ) : ''
+  );
   const [form, setForm] = useState({
-    username: user?.username || '', full_name: user?.full_name || '',
-    email: user?.email || '', role: user?.role || 'clinic_assistant',
-    password: '', is_active: user?.is_active ?? true,
+    username:        user?.username        || '',
+    full_name:       user?.full_name       || '',
+    email:           user?.email           || '',
+    password:        '',
+    is_active:       user?.is_active       ?? true,
+    specialization:  user?.specialization  || '',
+    badge_label:     user?.badge_label     || '',
+    specialties_txt: (user?.specialties || []).join(', '),
+    profile_picture: user?.profile_picture || '',
   });
+  const [picFile, setPicFile] = useState<File | null>(null);
+  const [picPreview, setPicPreview] = useState<string>(user?.profile_picture || '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -208,89 +269,224 @@ function UserModal({ user, onClose, onSave }: { user?: AdminUserRow | null; onCl
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
   };
 
+  const handlePicChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPicFile(file);
+    setPicPreview(URL.createObjectURL(file));
+  };
+
+  const uploadPic = async (file: File, username: string): Promise<string | null> => {
+    const ext = file.name.split('.').pop();
+    const path = `${username}-${Date.now()}.${ext}`;
+    const { error } = await supabase.storage.from('profile-pictures').upload(path, file, { upsert: true });
+    if (error) { console.error('Upload error:', error.message); return null; }
+    const { data } = supabase.storage.from('profile-pictures').getPublicUrl(path);
+    return data.publicUrl;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); setError('');
+    if (!roleType) { setError('Please select a user type'); return; }
     if (!form.username.trim() || !form.full_name.trim()) { setError('Username and full name required'); return; }
     if (!user && form.password.length < 6) { setError('Password must be at least 6 characters'); return; }
+
+    const showDoctors = ROLE_TYPES.find(r => r.value === roleType)?.showInDoctors ?? false;
+    const prefix = ROLE_TYPES.find(r => r.value === roleType)?.doctorKeyPrefix ?? null;
+    const doctorKey = prefix !== null
+      ? (prefix + form.username.toLowerCase().replace(/\s+/g, '-'))
+      : null;
+
+    const specialtiesArr = form.specialties_txt
+      .split(',').map(s => s.trim()).filter(Boolean);
+
     setLoading(true);
     try {
+      // Upload profile picture if selected
+      let picUrl = form.profile_picture;
+      if (picFile) {
+        const uploaded = await uploadPic(picFile, form.username.trim());
+        if (uploaded) picUrl = uploaded;
+      }
+
       if (user) {
-        const upd: any = { full_name: form.full_name, email: form.email, role: form.role, is_active: form.is_active };
+        const upd: any = {
+          full_name: form.full_name, email: form.email,
+          role: roleType, is_active: form.is_active,
+          specialization: form.specialization || null,
+          badge_label: form.badge_label || null,
+          specialties: specialtiesArr.length ? specialtiesArr : null,
+          profile_picture: picUrl || null,
+          doctor_key: doctorKey,
+          show_in_doctors: showDoctors,
+        };
         if (form.password) upd.password_hash = await sha(form.password);
         const { error: e } = await supabase.from('admin_users').update(upd).eq('id', user.id);
         if (e) throw e;
         toast.success('User updated');
       } else {
         const { error: e } = await supabase.from('admin_users').insert([{
-          username: form.username.trim(), full_name: form.full_name.trim(),
-          email: form.email, role: form.role, is_active: form.is_active,
+          username: form.username.trim(),
+          full_name: form.full_name.trim(),
+          email: form.email,
+          role: roleType,
+          is_active: form.is_active,
           password_hash: await sha(form.password),
+          specialization: form.specialization || null,
+          badge_label: form.badge_label || null,
+          specialties: specialtiesArr.length ? specialtiesArr : null,
+          profile_picture: picUrl || null,
+          doctor_key: doctorKey,
+          show_in_doctors: showDoctors,
         }]);
         if (e) throw e;
-        toast.success('User created');
+        toast.success('User created successfully');
       }
       onSave(); onClose();
-    } catch (err: any) { setError(err.message || 'Failed'); toast.error('Save failed'); }
+    } catch (err: any) { setError(err.message || 'Failed'); }
     setLoading(false);
   };
 
+  const selectedRoleType = ROLE_TYPES.find(r => r.value === roleType);
+  const showDoctorFields = roleType === 'doctor' || roleType === 'technician';
+
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-lg" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-6">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-6 border-b border-gray-100">
           <h2 className="text-xl font-bold text-[#0A3D62]">{user ? 'Edit User' : 'Add New User'}</h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18}/></button>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && <div className="flex items-center gap-2 p-3 bg-red-50 text-red-600 text-sm rounded-xl"><AlertCircle size={16} />{error}</div>}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Username *</label>
-              <input value={form.username} onChange={e => setForm({ ...form, username: e.target.value })}
-                disabled={!!user} required
-                className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none disabled:bg-gray-50" />
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+          {error && <div className="flex items-center gap-2 p-3 bg-red-50 text-red-600 text-sm rounded-xl"><AlertCircle size={16}/>{error}</div>}
+
+          {/* Step 1: Select Role Type */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-3">User Type *</label>
+            <div className="grid grid-cols-2 gap-3">
+              {ROLE_TYPES.map(rt => (
+                <button key={rt.value} type="button"
+                  onClick={() => setRoleType(rt.value)}
+                  className={`p-4 rounded-xl border-2 text-left transition-all ${roleType === rt.value ? rt.color + ' border-2' : 'border-gray-200 hover:border-gray-300'}`}>
+                  <div className="text-2xl mb-1">{rt.icon}</div>
+                  <p className="font-semibold text-[#0A3D62] text-sm">{rt.label}</p>
+                  <p className="text-xs text-gray-500 mt-0.5 leading-tight">{rt.description}</p>
+                </button>
+              ))}
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
-              <input value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required
-                className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none" />
-            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-            <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
-              className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-            <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}
-              className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none">
-              {Object.entries(roleLabels).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">{user ? 'New Password (blank = no change)' : 'Password *'}</label>
-            <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
-              placeholder={user ? 'Leave blank to keep current' : 'Set password'}
-              className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none" />
-          </div>
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="rounded" />
-            <span className="text-sm text-gray-700">Account is active</span>
-          </label>
-          <div className="flex gap-3 pt-2">
-            <button type="button" onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium">Cancel</button>
-            <button type="submit" disabled={loading} className="flex-1 px-4 py-2.5 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold disabled:opacity-60">
-              {loading ? 'Saving...' : (user ? 'Update' : 'Create User')}
-            </button>
-          </div>
+
+          {roleType && (
+            <>
+              {/* Profile Picture */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Profile Picture (optional)</label>
+                <div className="flex items-center gap-4">
+                  <div className="w-20 h-20 rounded-2xl bg-gray-100 overflow-hidden flex-shrink-0 border-2 border-gray-200">
+                    {picPreview
+                      ? <img src={picPreview} alt="preview" className="w-full h-full object-cover"/>
+                      : <div className="w-full h-full flex items-center justify-center text-gray-400 text-3xl">👤</div>}
+                  </div>
+                  <div>
+                    <input type="file" accept="image/*" onChange={handlePicChange} id="pic-upload" className="hidden"/>
+                    <label htmlFor="pic-upload" className="cursor-pointer px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-xl transition-colors">
+                      Choose Photo
+                    </label>
+                    <p className="text-xs text-gray-400 mt-1">JPG, PNG. Max 2MB recommended.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Basic Info */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Username *</label>
+                  <input value={form.username} onChange={e => setForm({...form, username: e.target.value})}
+                    disabled={!!user} required placeholder="e.g. dr_john"
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none text-sm disabled:bg-gray-50"/>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+                  <input value={form.full_name} onChange={e => setForm({...form, full_name: e.target.value})}
+                    required placeholder="e.g. Dr. John Smith"
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none text-sm"/>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})}
+                  placeholder="doctor@arviortho.com"
+                  className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none text-sm"/>
+              </div>
+
+              {/* Doctor / Technician specific fields */}
+              {showDoctorFields && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Specialization</label>
+                      <input value={form.specialization} onChange={e => setForm({...form, specialization: e.target.value})}
+                        placeholder="e.g. MS Orthopaedics"
+                        className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none text-sm"/>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Badge Label</label>
+                      <input value={form.badge_label} onChange={e => setForm({...form, badge_label: e.target.value})}
+                        placeholder="e.g. Orthopaedic Specialist"
+                        className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none text-sm"/>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Specialties <span className="text-gray-400 font-normal">(comma separated)</span></label>
+                    <textarea value={form.specialties_txt} onChange={e => setForm({...form, specialties_txt: e.target.value})}
+                      rows={2} placeholder="e.g. Fracture Management, Joint Pain, Spine Problems"
+                      className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none text-sm resize-none"/>
+                    <p className="text-xs text-gray-400 mt-1">These appear on the Doctors page and appointment booking.</p>
+                  </div>
+                </>
+              )}
+
+              {/* Password */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{user ? 'New Password (blank = no change)' : 'Password *'}</label>
+                <input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})}
+                  placeholder={user ? 'Leave blank to keep current' : 'Min 6 characters'}
+                  className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-[#0F9FA8] outline-none text-sm"/>
+              </div>
+
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" checked={form.is_active} onChange={e => setForm({...form, is_active: e.target.checked})} className="rounded"/>
+                <span className="text-sm text-gray-700">Account is active</span>
+              </label>
+
+              {/* Summary */}
+              {selectedRoleType && (
+                <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-xs text-blue-700 space-y-1">
+                  <p className="font-semibold text-sm text-blue-800">{selectedRoleType.icon} {selectedRoleType.label} Access</p>
+                  {roleType === 'master_admin' && <p>Full admin access — can manage all appointments, users, media, flash news, and leave.</p>}
+                  {roleType === 'doctor' && <p>Can view their own appointments and messages, apply leave for themselves, change password. Profile appears on Doctors page. Patients can book appointments with them.</p>}
+                  {roleType === 'technician' && <p>Same as Doctor access. Profile appears on Doctors page under Technician/Expert category.</p>}
+                  {roleType === 'clinic_assistant' && <p>Read-only access to all appointments and messages. Can apply leave, change password.</p>}
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium">Cancel</button>
+                <button type="submit" disabled={loading} className="flex-1 px-4 py-2.5 bg-[#0F9FA8] text-white rounded-xl text-sm font-semibold disabled:opacity-60">
+                  {loading ? 'Saving...' : (user ? 'Update User' : 'Create User')}
+                </button>
+              </div>
+            </>
+          )}
         </form>
       </div>
     </div>
   );
 }
 
-// ─── Reply Modal ──────────────────────────────────────────────────────────────
+// ─── Reply Modal ───// ─── Reply Modal ──────────────────────────────────────────────────────────────
 function ReplyModal({ msg, onClose, onReplied }: { msg: ContactMessage; onClose: () => void; onReplied: (id: string, reply: string) => void }) {
   const [reply, setReply] = useState(msg.admin_reply || '');
   const [loading, setLoading] = useState(false);
@@ -666,12 +862,20 @@ export default function Admin() {
     toast.success(newVal ? '📌 Pinned to top' : 'Unpinned');
   };
 
-  // ── Specialist permission map ─────────────────────────────────────────────
+  // ── Specialist permission map — includes static + dynamic DB users ────────
   const SPECIALIST_OPTIONS = [
-    { value: 'doctor_aravind',  label: 'Dr. Aravindasamy M',           roles: ['master_admin','clinic_assistant','doctor_aravind'] },
-    { value: 'doctor_vishali',  label: 'Dr. Vishali G',                 roles: ['master_admin','clinic_assistant','doctor_vishali'] },
-    { value: 'physiotherapist', label: 'Physiotherapist Expert',        roles: ['master_admin','clinic_assistant','physiotherapist'] },
-    { value: 'clinic_holiday',  label: 'Arvi Clinic Holiday (All)',     roles: ['master_admin','clinic_assistant'] },
+    { value: 'doctor_aravind',  label: 'Dr. Aravindasamy M',       roles: ['master_admin','clinic_assistant','doctor_aravind'] },
+    { value: 'doctor_vishali',  label: 'Dr. Vishali G',             roles: ['master_admin','clinic_assistant','doctor_vishali'] },
+    { value: 'physiotherapist', label: 'Physiotherapist Expert',    roles: ['master_admin','clinic_assistant','physiotherapist'] },
+    // Dynamic doctor/technician users from DB
+    ...adminUsers
+      .filter(u => (u.role === 'doctor' || u.role === 'technician') && u.is_active && u.username)
+      .map(u => ({
+        value: u.username,
+        label: u.full_name,
+        roles: ['master_admin', 'clinic_assistant', u.username],
+      })),
+    { value: 'clinic_holiday', label: 'Arvi Clinic Holiday (All)', roles: ['master_admin','clinic_assistant'] },
   ];
   const SPECIALIST_DOCTOR_MAP: Record<string,string[]> = {
     'doctor_aravind':  ['dr-aravindasamy'],
@@ -680,6 +884,15 @@ export default function Admin() {
     'clinic_holiday':  ['dr-aravindasamy','dr-vishali','physiotherapist'],
   };
   const currentUserRole = user?.role || '';
+  // Merge static + dynamic doctor labels for appointment display
+  const dynamicDoctorLabels = {
+    ...doctorLabels,
+    ...Object.fromEntries(
+      adminUsers
+        .filter(u => (u.role === 'doctor' || u.role === 'technician') && u.doctor_key)
+        .map(u => [u.doctor_key!, u.full_name])
+    )
+  };
   const allowedSpecialists = SPECIALIST_OPTIONS.filter(s => s.roles.includes(currentUserRole));
 
   // Auto-select specialist for non-master-admin / non-CA users (doctors/physio select themselves)
@@ -845,7 +1058,7 @@ export default function Admin() {
 
       if (isMasterAdmin) {
         const [usersRes, waRes, cfgRes] = await Promise.all([
-          supabase.from('admin_users').select('id,username,role,full_name,email,is_active').order('created_at', { ascending: true }),
+          supabase.from('admin_users').select('id,username,role,full_name,email,is_active,specialization,specialties,profile_picture,doctor_key,badge_label,show_in_doctors').order('created_at', { ascending: true }),
           supabase.from('whatsapp_logs').select('*').order('created_at', { ascending: false }).limit(100),
           supabase.from('admin_settings').select('*').eq('key', 'whatsapp_enabled').maybeSingle(),
         ]);
